@@ -137,17 +137,6 @@ export default function SavedConnections({
         <button
           className="p-0.5 transition-colors hover:opacity-80"
           style={{ color: "var(--df-text-dimmed)" }}
-          title={t("savedConnections.connect")}
-          onClick={(e) => {
-            e.stopPropagation();
-            handleConnect(conn);
-          }}
-        >
-          <span className="material-icons text-sm">play_arrow</span>
-        </button>
-        <button
-          className="p-0.5 transition-colors hover:opacity-80"
-          style={{ color: "var(--df-text-dimmed)" }}
           title={t("savedConnections.edit")}
           onClick={(e) => handleEdit(e, conn)}
         >
