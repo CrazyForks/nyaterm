@@ -62,7 +62,6 @@ export default function AboutDialog({ open, onClose }: AboutDialogProps) {
             {t("about.issues")}
           </Button>
         </div>
-
       </DialogContent>
     </Dialog>
   );

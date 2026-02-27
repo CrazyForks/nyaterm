@@ -25,7 +25,9 @@ interface AppContextType {
 
   // App Settings
   appSettings: AppSettings;
-  updateAppSettings: (updates: Partial<AppSettings> | ((prev: AppSettings) => Partial<AppSettings>)) => void;
+  updateAppSettings: (
+    updates: Partial<AppSettings> | ((prev: AppSettings) => Partial<AppSettings>),
+  ) => void;
 
   // Data
   savedConnections: SavedConnection[];
@@ -92,7 +94,6 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
     port: 1080,
   },
   search: {
-    default_engine: "google",
     custom_engines: [
       { name: "Google", url_template: "https://google.com/search?q=%s" },
       { name: "Bing", url_template: "https://bing.com/search?q=%s" },
@@ -176,39 +177,45 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, []);
 
   // 2. Save UI Config Debounced
-  const updateUiConfig = useCallback((updates: Partial<UiConfig> | ((prev: UiConfig) => Partial<UiConfig>)) => {
-    setUiConfig((prev) => {
-      const nextUpdates = typeof updates === "function" ? updates(prev) : updates;
-      const next = { ...prev, ...nextUpdates };
-      // Debounce save
-      if (uiConfigLoaded.current) {
-        if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-        saveTimerRef.current = setTimeout(() => {
-          invoke("save_ui_config", { config: next }).catch((e) =>
-            logger.error("Failed to save UI config", e),
-          );
-        }, 500);
-      }
-      return next;
-    });
-  }, []);
+  const updateUiConfig = useCallback(
+    (updates: Partial<UiConfig> | ((prev: UiConfig) => Partial<UiConfig>)) => {
+      setUiConfig((prev) => {
+        const nextUpdates = typeof updates === "function" ? updates(prev) : updates;
+        const next = { ...prev, ...nextUpdates };
+        // Debounce save
+        if (uiConfigLoaded.current) {
+          if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+          saveTimerRef.current = setTimeout(() => {
+            invoke("save_ui_config", { config: next }).catch((e) =>
+              logger.error("Failed to save UI config", e),
+            );
+          }, 500);
+        }
+        return next;
+      });
+    },
+    [],
+  );
 
   // 2.5 Save App Settings Debounced
-  const updateAppSettings = useCallback((updates: Partial<AppSettings> | ((prev: AppSettings) => Partial<AppSettings>)) => {
-    setAppSettings((prev) => {
-      const nextUpdates = typeof updates === "function" ? updates(prev) : updates;
-      const next = { ...prev, ...nextUpdates };
-      if (appSettingsLoaded.current) {
-        if (appSettingsSaveTimerRef.current) clearTimeout(appSettingsSaveTimerRef.current);
-        appSettingsSaveTimerRef.current = setTimeout(() => {
-          invoke("save_app_settings", { settings: next }).catch((e) =>
-            logger.error("Failed to save app settings", e),
-          );
-        }, 500);
-      }
-      return next;
-    });
-  }, []);
+  const updateAppSettings = useCallback(
+    (updates: Partial<AppSettings> | ((prev: AppSettings) => Partial<AppSettings>)) => {
+      setAppSettings((prev) => {
+        const nextUpdates = typeof updates === "function" ? updates(prev) : updates;
+        const next = { ...prev, ...nextUpdates };
+        if (appSettingsLoaded.current) {
+          if (appSettingsSaveTimerRef.current) clearTimeout(appSettingsSaveTimerRef.current);
+          appSettingsSaveTimerRef.current = setTimeout(() => {
+            invoke("save_app_settings", { settings: next }).catch((e) =>
+              logger.error("Failed to save app settings", e),
+            );
+          }, 500);
+        }
+        return next;
+      });
+    },
+    [],
+  );
 
   // 3. Load Connections
   const refreshConnections = useCallback(async () => {

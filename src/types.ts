@@ -130,10 +130,10 @@ export interface ProxySettings {
 export interface SearchEngine {
   name: string;
   url_template: string;
+  icon?: string;
 }
 
 export interface SearchSettings {
-  default_engine: string;
   custom_engines: SearchEngine[];
 }
 
