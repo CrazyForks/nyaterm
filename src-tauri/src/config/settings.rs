@@ -246,8 +246,8 @@ fn default_encoding() -> String {
 impl Default for InteractionSettings {
     fn default() -> Self {
         Self {
-            copy_on_select: true,
-            right_click_paste: true,
+            copy_on_select: false,
+            right_click_paste: false,
             word_separators: default_word_separators(),
             default_encoding: default_encoding(),
         }
