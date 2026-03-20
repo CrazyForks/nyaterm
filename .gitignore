@@ -8,6 +8,9 @@ pnpm-debug.log*
 lerna-debug.log*
 
 node_modules
+docs-site/node_modules
+docs-site/build
+docs-site/.docusaurus
 dist
 dist-ssr
 *.local

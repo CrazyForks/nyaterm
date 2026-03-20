@@ -1,0 +1,14 @@
+{
+  "title": {
+    "message": "Dragonfly"
+  },
+  "tagline": {
+    "message": "Modern, High-Performance SSH Client"
+  },
+  "theme.docs.sidebar.collapseButtonTitle": {
+    "message": "Collapse sidebar"
+  },
+  "theme.docs.sidebar.expandButtonTitle": {
+    "message": "Expand sidebar"
+  }
+}
