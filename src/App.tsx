@@ -237,6 +237,16 @@ function App() {
     [activeTab],
   );
 
+  const handleReconnected = useCallback(
+    (oldSessionId: string, newSessionId: string) => {
+      const tab = tabs.find((t) => t.sessionId === oldSessionId);
+      if (tab) {
+        updateTabSession(tab.id, newSessionId);
+      }
+    },
+    [tabs, updateTabSession],
+  );
+
   // --- Shortcut callbacks ---
 
   const handleNewLocalTerminal = useCallback(() => {
@@ -655,6 +665,8 @@ function App() {
                       key={tab.sessionId}
                       sessionId={tab.sessionId}
                       active={activeTabId === tab.id}
+                      connectionId={tab.connectionId}
+                      onReconnected={handleReconnected}
                     />
                   ),
                 )

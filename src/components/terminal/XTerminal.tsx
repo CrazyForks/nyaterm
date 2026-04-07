@@ -26,13 +26,15 @@ import "@xterm/xterm/css/xterm.css";
 interface XTerminalProps {
   sessionId: string;
   active: boolean;
+  connectionId?: string;
+  onReconnected?: (oldSessionId: string, newSessionId: string) => void;
 }
 
 /**
  * xterm.js terminal for a session. Handles OSC 133 shell integration (or fallback prompt
  * detection), fuzzy command history suggestions, and resize/fit. Key props: sessionId, active.
  */
-export default function XTerminal({ sessionId, active }: XTerminalProps) {
+export default function XTerminal({ sessionId, active, connectionId, onReconnected }: XTerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
@@ -46,6 +48,23 @@ export default function XTerminal({ sessionId, active }: XTerminalProps) {
   const tRef = useRef(t);
   const doFindRef = useRef<(selection?: string) => void>(() => {});
   const sendInputRef = useRef<((data: string) => void) | null>(null);
+  const disconnectedRef = useRef(false);
+  const reconnectingRef = useRef(false);
+  const connectionIdRef = useRef(connectionId);
+  const onReconnectedRef = useRef(onReconnected);
+  const sessionIdRef = useRef(sessionId);
+
+  useEffect(() => {
+    connectionIdRef.current = connectionId;
+  }, [connectionId]);
+
+  useEffect(() => {
+    onReconnectedRef.current = onReconnected;
+  }, [onReconnected]);
+
+  useEffect(() => {
+    sessionIdRef.current = sessionId;
+  }, [sessionId]);
 
   useEffect(() => {
     appSettingsRef.current = appSettings;
@@ -396,7 +415,11 @@ export default function XTerminal({ sessionId, active }: XTerminalProps) {
       });
 
       closedUnlisten = await listen<void>(`session-closed-${sessionId}`, () => {
+        disconnectedRef.current = true;
         terminal.write(`\r\n\x1b[31m[${tRef.current("terminal.sessionDisconnected")}]\x1b[0m\r\n`);
+        if (connectionIdRef.current) {
+          terminal.write(`\x1b[33m[${tRef.current("terminal.pressEnterToReconnect")}]\x1b[0m\r\n`);
+        }
       });
 
       focusUnlisten = await listen<void>(`focus-terminal-${sessionId}`, () => {
@@ -408,6 +431,25 @@ export default function XTerminal({ sessionId, active }: XTerminalProps) {
     setupListeners();
 
     const dataDisposable = terminal.onData((data) => {
+      if (disconnectedRef.current) {
+        if (data === "\r" && connectionIdRef.current && !reconnectingRef.current) {
+          reconnectingRef.current = true;
+          terminal.write(`\r\n\x1b[36m[${tRef.current("terminal.reconnecting")}]\x1b[0m\r\n`);
+          invoke<string>("create_ssh_session", { connectionId: connectionIdRef.current })
+            .then((newSessionId) => {
+              disconnectedRef.current = false;
+              reconnectingRef.current = false;
+              onReconnectedRef.current?.(sessionIdRef.current, newSessionId);
+            })
+            .catch((err) => {
+              reconnectingRef.current = false;
+              terminal.write(`\r\n\x1b[31m[${tRef.current("terminal.reconnectFailed")}: ${err}]\x1b[0m\r\n`);
+              terminal.write(`\x1b[33m[${tRef.current("terminal.pressEnterToReconnect")}]\x1b[0m\r\n`);
+            });
+        }
+        return;
+      }
+
       if (showSuggestionsRef.current && suggestionsRef.current.length > 0) {
         if (data === "\t" && selectedIndexRef.current >= 0) {
           const selected = suggestionsRef.current[selectedIndexRef.current];
