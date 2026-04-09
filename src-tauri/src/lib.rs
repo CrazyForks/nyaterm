@@ -13,7 +13,7 @@ mod ssh;
 mod translate;
 
 use runtime::{RecordingManager, SessionManager};
-use ssh::TunnelManager;
+use ssh::{PendingAuthManager, TunnelManager};
 use std::sync::Arc;
 use tauri::Manager;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
@@ -64,7 +64,7 @@ pub fn run() {
     let session_manager = Arc::new(SessionManager::new());
     let tunnel_manager = Arc::new(TunnelManager::new());
     let recording_manager = Arc::new(RecordingManager::new());
-    
+    let pending_auth_manager = Arc::new(PendingAuthManager::new());
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -72,7 +72,7 @@ pub fn run() {
         .manage(session_manager.clone())
         .manage(tunnel_manager.clone())
         .manage(recording_manager.clone())
-        
+        .manage(pending_auth_manager.clone())
         .setup(move |app| {
             let home_dir = app
                 .path()
@@ -145,8 +145,8 @@ pub fn run() {
             commands::session_cmds::start_recording,
             commands::session_cmds::stop_recording,
             commands::session_cmds::is_recording,
-            
-            
+            commands::session_cmds::submit_otp_response,
+            commands::session_cmds::cancel_otp_request,
             commands::sftp_cmds::get_home_dir,
             commands::sftp_cmds::list_remote_dir,
             commands::sftp_cmds::delete_remote_file,

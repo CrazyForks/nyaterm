@@ -2,7 +2,7 @@ use crate::config;
 use crate::error::{AppError, AppResult};
 use crate::fuzzy::{fuzzy_search_items, FuzzyResult};
 use crate::runtime::{self, RecordingManager, SessionCommand, SessionInfo, SessionManager};
-use crate::ssh::{self};
+use crate::ssh::{self, PendingAuthManager};
 use std::sync::Arc;
 use tauri::Manager;
 
@@ -166,4 +166,27 @@ pub async fn is_recording(
 }
 
 #[tauri::command]
+pub async fn submit_otp_response(
+    state: tauri::State<'_, Arc<PendingAuthManager>>,
+    request_id: String,
+    responses: Vec<String>,
+) -> AppResult<()> {
+    if state.respond(&request_id, Some(responses)).await {
+        Ok(())
+    } else {
+        Err(AppError::Auth(format!(
+            "No pending OTP request with id '{}'",
+            request_id
+        )))
+    }
+}
+
+#[tauri::command]
+pub async fn cancel_otp_request(
+    state: tauri::State<'_, Arc<PendingAuthManager>>,
+    request_id: String,
+) -> AppResult<()> {
+    state.respond(&request_id, None).await;
+    Ok(())
+}
 
