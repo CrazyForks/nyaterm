@@ -2,16 +2,25 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { MdExpandMore, MdSettings } from "react-icons/md";
+import { MdChevronRight, MdExpandMore, MdSettings } from "react-icons/md";
 import { KeyManagementTab } from "@/components/settings/KeyManagementTab";
 import { PasswordManagementTab } from "@/components/settings/PasswordManagementTab";
 import { Button } from "@/components/ui/button";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { NumberInput } from "@/components/ui/number-input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import type { SavedPassword, SshKey } from "@/types/global";
+import type { OtpEntry, ProxyConfig, SavedPassword, SshKey } from "@/types/global";
 
 interface SshFormProps {
   host: string;
@@ -26,6 +35,14 @@ interface SshFormProps {
   setPasswordId: (v: string) => void;
   keyId: string;
   setKeyId: (v: string) => void;
+  proxyId: string;
+  setProxyId: (v: string) => void;
+  proxies: ProxyConfig[];
+  otpId: string;
+  setOtpId: (v: string) => void;
+  autoFillOtp: boolean;
+  setAutoFillOtp: (v: boolean) => void;
+  otpEntries: OtpEntry[];
 }
 
 export function SshForm({
@@ -41,6 +58,14 @@ export function SshForm({
   setPasswordId,
   keyId,
   setKeyId,
+  proxyId,
+  setProxyId,
+  proxies,
+  otpId,
+  setOtpId,
+  autoFillOtp,
+  setAutoFillOtp,
+  otpEntries,
 }: SshFormProps) {
   const { t } = useTranslation();
   const [sshKeys, setSshKeys] = useState<SshKey[]>([]);
@@ -49,6 +74,7 @@ export function SshForm({
   const [showPasswordDropdown, setShowPasswordDropdown] = useState(false);
   const [showKeyManagement, setShowKeyManagement] = useState(false);
   const [showPasswordManagement, setShowPasswordManagement] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const keyRef = useRef<HTMLDivElement>(null);
   const passwordRef = useRef<HTMLDivElement>(null);
 
@@ -110,6 +136,16 @@ export function SshForm({
 
   const selectedKeyName = sshKeys.find((k) => k.id === keyId)?.name;
   const selectedPasswordName = savedPasswords.find((p) => p.id === passwordId)?.name;
+  const selectedProxyName = proxies.find((proxy) => proxy.id === proxyId)?.name;
+  const selectedOtpLabel = otpEntries.find((entry) => entry.id === otpId);
+  const advancedSummary = [
+    proxyId ? (selectedProxyName ?? t("dialog.proxySelect")) : t("dialog.noProxy"),
+    otpId
+      ? selectedOtpLabel
+        ? `${selectedOtpLabel.issuer} (${selectedOtpLabel.username})`
+        : t("dialog.selectOtp")
+      : t("dialog.noOtp"),
+  ].join(" · ");
 
   return (
     <div className="space-y-4 w-full">
@@ -283,6 +319,108 @@ export function SshForm({
           </TabsContent>
         </Tabs>
       </div>
+
+      <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
+        <CollapsibleTrigger className="group flex w-full items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground">
+          <MdChevronRight
+            className={`text-sm transition-transform duration-200 ${advancedOpen ? "rotate-90" : ""}`}
+          />
+          <span>{t("dialog.advancedConfig")}</span>
+          <span className="ml-auto truncate text-[0.625rem] text-muted-foreground/80">
+            {advancedSummary}
+          </span>
+        </CollapsibleTrigger>
+        <CollapsibleContent className="mt-3 space-y-3">
+          <div className="grid gap-3 lg:grid-cols-2">
+            <div className="rounded-lg border bg-accent/25 p-3">
+              <div className="space-y-0.5">
+                <div className="text-xs font-medium">{t("dialog.proxySelect")}</div>
+                <p className="text-[0.6875rem] leading-relaxed text-muted-foreground">
+                  {proxyId
+                    ? `${selectedProxyName ?? t("dialog.proxySelect")}`
+                    : t("dialog.noProxy")}
+                </p>
+              </div>
+              <div className="mt-3">
+                <Label className="text-[0.6875rem] text-muted-foreground">
+                  {t("dialog.proxySelect")}
+                </Label>
+                <Select
+                  value={proxyId || "__none__"}
+                  onValueChange={(value) => setProxyId(value === "__none__" ? "" : value)}
+                >
+                  <SelectTrigger className="mt-1 h-8 bg-background/85 text-xs">
+                    <SelectValue placeholder={t("dialog.noProxy")} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">{t("dialog.noProxy")}</SelectItem>
+                    {proxies.map((proxy) => (
+                      <SelectItem key={proxy.id} value={proxy.id}>
+                        {proxy.name} ({proxy.protocol.toUpperCase()} {proxy.host}:{proxy.port})
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <div className="rounded-lg border bg-accent/25 p-3">
+              <div className="space-y-0.5">
+                <div className="text-xs font-medium">{t("dialog.twoFactorAuth")}</div>
+                <p className="text-[0.6875rem] leading-relaxed text-muted-foreground">
+                  {otpId && selectedOtpLabel
+                    ? `${selectedOtpLabel.issuer} (${selectedOtpLabel.username})`
+                    : t("dialog.noOtp")}
+                </p>
+              </div>
+              <div className="mt-3 space-y-3">
+                <div>
+                  <Label className="text-[0.6875rem] text-muted-foreground">
+                    {t("dialog.selectOtp")}
+                  </Label>
+                  <Select
+                    value={otpId || "__none__"}
+                    onValueChange={(value) => {
+                      const id = value === "__none__" ? "" : value;
+                      setOtpId(id);
+                      if (!id) setAutoFillOtp(false);
+                    }}
+                  >
+                    <SelectTrigger className="mt-1 h-8 bg-background/85 text-xs">
+                      <SelectValue placeholder={t("dialog.noOtp")} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__none__">{t("dialog.noOtp")}</SelectItem>
+                      {otpEntries.map((entry) => (
+                        <SelectItem key={entry.id} value={entry.id}>
+                          {entry.issuer} ({entry.username})
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="rounded-md border border-dashed bg-background/70 px-3 py-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="text-[0.6875rem] font-medium">{t("dialog.autoFillOtp")}</div>
+                      <div className="text-[0.625rem] text-muted-foreground">
+                        {otpId ? t("dialog.twoFactorAuth") : t("dialog.noOtp")}
+                      </div>
+                    </div>
+                    <Switch
+                      checked={otpId ? autoFillOtp : false}
+                      onCheckedChange={setAutoFillOtp}
+                      disabled={!otpId}
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </CollapsibleContent>
+      </Collapsible>
+
       <Dialog
         open={showKeyManagement}
         onOpenChange={(open) => {

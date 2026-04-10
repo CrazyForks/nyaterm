@@ -12,19 +12,11 @@ import { SerialForm } from "@/components/sessions/SerialForm";
 import { SshForm } from "@/components/sessions/SshForm";
 import { TelnetForm } from "@/components/sessions/TelnetForm";
 import { Button } from "@/components/ui/button";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
-import type { Group, ProxyConfig, SavedConnection } from "@/types/global";
+import type { Group, OtpEntry, ProxyConfig, SavedConnection } from "@/types/global";
 
 export default function NewSessionPage() {
   const { t } = useTranslation();
@@ -57,6 +49,11 @@ export default function NewSessionPage() {
   // Proxy
   const [proxyId, setProxyId] = useState("");
   const [proxies, setProxies] = useState<ProxyConfig[]>([]);
+
+  // OTP / 2FA
+  const [otpId, setOtpId] = useState("");
+  const [autoFillOtp, setAutoFillOtp] = useState(false);
+  const [otpEntries, setOtpEntries] = useState<OtpEntry[]>([]);
 
   // Serial Settings States
   const [serialPortName, setSerialPortName] = useState("COM1");
@@ -93,6 +90,9 @@ export default function NewSessionPage() {
     invoke<ProxyConfig[]>("get_proxies")
       .then(setProxies)
       .catch(() => {});
+    invoke<OtpEntry[]>("get_otp_entries")
+      .then(setOtpEntries)
+      .catch(() => {});
 
     if (editId) {
       invoke<SavedConnection[]>("get_saved_connections")
@@ -111,6 +111,8 @@ export default function NewSessionPage() {
             setKeyId(found.key_id || "");
             setIconKey(found.icon || "");
             setProxyId(found.proxy_id || "");
+            setOtpId(found.otp_id || "");
+            setAutoFillOtp(found.auto_fill_otp || false);
           }
         })
         .catch(() => {});
@@ -130,6 +132,8 @@ export default function NewSessionPage() {
     setKeyId("");
     setIconKey("");
     setProxyId("");
+    setOtpId("");
+    setAutoFillOtp(false);
     setShowIconPicker(false);
     setError("");
     setConnecting(false);
@@ -183,6 +187,8 @@ export default function NewSessionPage() {
         key_id: authType === "key" && keyId ? keyId : undefined,
         icon: iconKey || undefined,
         proxy_id: proxyId || undefined,
+        otp_id: otpId || undefined,
+        auto_fill_otp: otpId ? autoFillOtp : undefined,
         network: initialData?.network ?? {},
       };
 
@@ -434,6 +440,14 @@ export default function NewSessionPage() {
               setPasswordId={setPasswordId}
               keyId={keyId}
               setKeyId={setKeyId}
+              proxyId={proxyId}
+              setProxyId={setProxyId}
+              proxies={proxies}
+              otpId={otpId}
+              setOtpId={setOtpId}
+              autoFillOtp={autoFillOtp}
+              setAutoFillOtp={setAutoFillOtp}
+              otpEntries={otpEntries}
             />
           </TabsContent>
 
@@ -479,41 +493,6 @@ export default function NewSessionPage() {
                 onChange={(e) => setDescription(e.target.value)}
               />
             </div>
-
-            {currentTab === "ssh" && (
-              <div className="border-t pt-4">
-                <Collapsible>
-                  <CollapsibleTrigger className="flex w-full items-center justify-between rounded-md border px-3 py-2 text-sm font-medium transition-colors hover:bg-accent [&[data-state=open]>svg]:rotate-180">
-                    {t("dialog.advancedConfig")}
-                    <MdExpandMore className="text-base text-muted-foreground transition-transform duration-200" />
-                  </CollapsibleTrigger>
-                  <CollapsibleContent className="mt-2 space-y-3">
-                    <div className="w-full max-w-full sm:w-72">
-                      <Label className="text-[0.6875rem] text-muted-foreground">
-                        {t("dialog.proxySelect")}
-                      </Label>
-                      <Select
-                        value={proxyId || "__none__"}
-                        onValueChange={(value) => setProxyId(value === "__none__" ? "" : value)}
-                      >
-                        <SelectTrigger className="mt-1 h-8 text-xs">
-                          <SelectValue placeholder={t("dialog.noProxy")} />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="__none__">{t("dialog.noProxy")}</SelectItem>
-                          {proxies.map((p) => (
-                            <SelectItem key={p.id} value={p.id}>
-                              {p.name} ({p.protocol.toUpperCase()} {p.host}:{p.port})
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  </CollapsibleContent>
-                </Collapsible>
-              </div>
-            )}
-
             {/* Messages */}
             {error && (
               <div className="p-2 bg-destructive/10 border border-destructive/30 rounded text-xs text-red-400">
