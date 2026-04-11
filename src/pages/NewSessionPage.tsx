@@ -192,6 +192,8 @@ export default function NewSessionPage() {
     setDataBits("8");
     setParity("none");
     setStopBits("1");
+    setShellPath("powershell.exe");
+    setWorkingDir("");
     setShowIconPicker(false);
     setError("");
     setConnecting(false);
