@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { type ComponentProps, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   MdAdd,
@@ -12,6 +12,7 @@ import {
 } from "react-icons/md";
 import { toast } from "sonner";
 import PanelHeader from "@/components/layout/PanelHeader";
+import { Button } from "@/components/ui/button";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -19,6 +20,7 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { Group, SavedConnection } from "@/types/global";
 import { useApp } from "@/context/AppContext";
 import { invoke } from "@/lib/invoke";
@@ -43,6 +45,23 @@ import GroupNodeItem from "./GroupNodeItem";
 interface SavedConnectionsProps {
   onNewConnection: (parentGroupId?: string) => void;
   onEditConnection: (connection: SavedConnection, autoConnect?: boolean) => void;
+}
+
+type HeaderActionButtonProps = ComponentProps<typeof Button> & {
+  tooltip: string;
+};
+
+function HeaderActionButton({ tooltip, children, ...props }: HeaderActionButtonProps) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button aria-label={tooltip} type="button" {...props}>
+          {children}
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent side="top">{tooltip}</TooltipContent>
+    </Tooltip>
+  );
 }
 
 /** Grouped saved SSH connections panel. Delegates rendering to sub-components via context. */
@@ -640,8 +659,10 @@ export default function SavedConnections({
               </button>
             )}
           </div>
-          <button
-            className="shrink-0 p-1 rounded border transition-colors hover:opacity-80"
+          <HeaderActionButton
+            variant="ghost"
+            size="icon-sm"
+            className="shrink-0 h-7 w-7 rounded-md border p-0 transition-colors hover:bg-transparent hover:opacity-80"
             style={{
               color: sortActive ? "var(--df-primary)" : "var(--df-text-muted)",
               borderColor: sortActive ? "var(--df-primary)" : "var(--df-border)",
@@ -649,63 +670,71 @@ export default function SavedConnections({
                 ? "color-mix(in srgb, var(--df-primary) 10%, transparent)"
                 : "var(--df-bg-hover)",
             }}
-            title={sortTitle}
+            tooltip={sortTitle}
             onClick={cycleSortMode}
           >
             <SortIcon
               className="text-sm"
               style={{ transform: sortMode === "name-desc" ? "scaleY(-1)" : undefined }}
             />
-          </button>
-          <button
-            className="shrink-0 p-1 rounded border transition-colors hover:opacity-80"
+          </HeaderActionButton>
+          <HeaderActionButton
+            variant="ghost"
+            size="icon-sm"
+            className="shrink-0 h-7 w-7 rounded-md border p-0 transition-colors hover:bg-transparent hover:opacity-80"
             style={{
               color: "var(--df-text-muted)",
               borderColor: "var(--df-border)",
               backgroundColor: "var(--df-bg-hover)",
             }}
-            title={t("savedConnections.importSessions")}
+            tooltip={t("savedConnections.importSessions")}
             onClick={() => setShowImportDialog(true)}
           >
             <MdFileUpload className="text-sm" />
-          </button>
-          <button
-            className="shrink-0 p-1 rounded border transition-colors hover:opacity-80"
+          </HeaderActionButton>
+          <HeaderActionButton
+            variant="ghost"
+            size="icon-sm"
+            className="shrink-0 h-7 w-7 rounded-md border p-0 transition-colors hover:bg-transparent hover:opacity-80"
             style={{
               color: "var(--df-text-muted)",
               borderColor: "var(--df-border)",
               backgroundColor: "var(--df-bg-hover)",
             }}
-            title={t("savedConnections.newFolder")}
+            tooltip={t("savedConnections.newFolder")}
             onClick={() => openNewFolderDialog(null)}
           >
             <MdCreateNewFolder className="text-sm" />
-          </button>
-          <button
-            className="shrink-0 p-1 rounded border transition-colors hover:opacity-80"
+          </HeaderActionButton>
+          <HeaderActionButton
+            variant="ghost"
+            size="icon-sm"
+            className="shrink-0 h-7 w-7 rounded-md border p-0 transition-colors hover:bg-transparent hover:opacity-80"
             style={{
               color: "var(--df-text-muted)",
               borderColor: "var(--df-border)",
               backgroundColor: "var(--df-bg-hover)",
             }}
-            title={t("savedConnections.newConnection")}
+            tooltip={t("savedConnections.newConnection")}
             onClick={() => onNewConnection()}
           >
             <MdAdd className="text-sm" />
-          </button>
+          </HeaderActionButton>
           {savedConnections.length > 0 && (
-            <button
-              className="shrink-0 p-1 rounded border transition-colors hover:opacity-80"
+            <HeaderActionButton
+              variant="ghost"
+              size="icon-sm"
+              className="shrink-0 h-7 w-7 rounded-md border p-0 transition-colors hover:bg-transparent hover:opacity-80"
               style={{
                 color: "var(--df-text-muted)",
                 borderColor: "var(--df-border)",
                 backgroundColor: "var(--df-bg-hover)",
               }}
-              title={t("savedConnections.clearAll")}
+              tooltip={t("savedConnections.clearAll")}
               onClick={() => setShowClearAllDialog(true)}
             >
               <MdDeleteSweep className="text-sm" />
-            </button>
+            </HeaderActionButton>
           )}
         </div>
 
