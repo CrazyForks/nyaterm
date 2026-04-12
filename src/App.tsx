@@ -102,6 +102,37 @@ function getItemSide(id: string, layout: ActivityBarLayout): "left" | "right" | 
   return null;
 }
 
+function collectActiveShellSessionIds(
+  layout: TerminalWindowNode | null,
+  tabsById: Map<string, Tab>,
+) {
+  if (!layout) return [];
+
+  const sessionIds = new Set<string>();
+
+  const visit = (node: TerminalWindowNode) => {
+    if (node.kind === "split") {
+      visit(node.first);
+      visit(node.second);
+      return;
+    }
+
+    for (const tabId of node.tabIds) {
+      const tab = tabsById.get(tabId);
+      if (!tab) continue;
+
+      for (const pane of collectSessionPanes(tab.root)) {
+        if (!pane.connecting && pane.type === "SSH") {
+          sessionIds.add(pane.sessionId);
+        }
+      }
+    }
+  };
+
+  visit(layout);
+  return [...sessionIds];
+}
+
 const CTRL_WHEEL_ZOOM_THROTTLE_MS = 50;
 
 /** Root layout: header, activity bars, sidebars, terminal area, dialogs. */
@@ -955,12 +986,14 @@ function App() {
       commandHistory: { icon: <MdHistory />, tooltip: t("panel.commandHistory") },
       resourceMonitor: { icon: <MdOutlineMonitorHeart />, tooltip: t("panel.resourceMonitor") },
       quickCmdBar: { icon: <MdBolt />, tooltip: t("panel.quickCommands") },
-      serialSend: { icon: <MdSend />, tooltip: t("panel.serialSend", "Serial Send") },
+      serialSend: { icon: <MdSend />, tooltip: t("panel.serialSend", "Command Send") },
       recording: {
         icon: (
           <PiRecordFill
             className={
-              activePane && recordingSessions.has(activePane.sessionId) ? "animate-pulse" : undefined
+              activePane && recordingSessions.has(activePane.sessionId)
+                ? "animate-pulse"
+                : undefined
             }
           />
         ),
@@ -1153,13 +1186,19 @@ function App() {
   const activeSessionId = activePane?.connecting ? null : (activePane?.sessionId ?? null);
   const activeSshSessionId =
     activePane && !activePane.connecting && activePane.type === "SSH" ? activePane.sessionId : null;
+  const activeSerialSessionId =
+    activePane && !activePane.connecting && activePane.type === "Serial"
+      ? activePane.sessionId
+      : null;
+  const activeShellSessionIds = useMemo(
+    () => collectActiveShellSessionIds(terminalWindows, tabsById),
+    [tabsById, terminalWindows],
+  );
   const activeBottomPanel = uiConfig.show_serial_send_panel
     ? "serialSend"
     : uiConfig.show_quick_cmd_bar
       ? "quickCmdBar"
       : null;
-  const canShowSerialSendPanel =
-    !!activePane && activePane.type === "Serial" && !activePane.connecting;
 
   const handleTransferResize = useCallback(
     (delta: number) => {
@@ -1364,24 +1403,10 @@ function App() {
                   style={{ height: uiConfig.serial_send_height || 120 }}
                   className="shrink-0 overflow-hidden"
                 >
-                  {canShowSerialSendPanel && activePane ? (
-                    <SerialSendPanel sessionId={activePane.sessionId} />
-                  ) : (
-                    <div
-                      className="h-full flex flex-col items-center justify-center gap-1 px-4 text-center"
-                      style={{
-                        backgroundColor: "var(--df-bg-panel)",
-                        color: "var(--df-text-dimmed)",
-                      }}
-                    >
-                      <div className="text-xs font-medium" style={{ color: "var(--df-text)" }}>
-                        {t("serialSend.unavailable")}
-                      </div>
-                      <div className="text-[0.6875rem]">
-                        {t("serialSend.unavailableDesc")}
-                      </div>
-                    </div>
-                  )}
+                  <SerialSendPanel
+                    serialSessionId={activeSerialSessionId}
+                    shellSessionIds={activeShellSessionIds}
+                  />
                 </div>
               </>
             )}
