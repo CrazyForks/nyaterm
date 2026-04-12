@@ -53,7 +53,11 @@ impl RestorablePaneNode {
                 session_type,
                 connection_id,
                 ..
-            } => Some((title.as_str(), session_type.as_str(), connection_id.as_deref())),
+            } => Some((
+                title.as_str(),
+                session_type.as_str(),
+                connection_id.as_deref(),
+            )),
             Self::Split { first, second, .. } => first
                 .first_leaf_summary()
                 .or_else(|| second.first_leaf_summary()),
