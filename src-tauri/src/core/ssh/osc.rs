@@ -57,11 +57,18 @@ pub fn injection_script(shell: ShellKind, ready_marker: &str) -> Option<String> 
     match shell {
         ShellKind::Bash => Some(format!(
             concat!(
+                " DFLY_PRUNE_HISTORY=1;",
                 " if [ -z \"${{DFLY_INJ:-}}\" ]; then export DFLY_INJ=1;",
                 " __df_host(){{ hostname 2>/dev/null || printf localhost; }};",
-                " __df_emit(){{ printf '\\033]7;file://%s%s\\007' \"$(__df_host)\" \"$PWD\"; }};",
-                " case \"${{PROMPT_COMMAND-}}\" in (*__df_emit*) ;; (*)",
-                " PROMPT_COMMAND=\"__df_emit${{PROMPT_COMMAND:+; $PROMPT_COMMAND}}\" ;; esac;",
+                " __df_prompt(){{",
+                " if [ -n \"${{DFLY_PRUNE_HISTORY:-}}\" ]; then",
+                " history -d $((HISTCMD-1)) 2>/dev/null || true;",
+                " unset DFLY_PRUNE_HISTORY;",
+                " fi;",
+                " printf '\\033]7;file://%s%s\\007' \"$(__df_host)\" \"$PWD\";",
+                " }};",
+                " case \"${{PROMPT_COMMAND-}}\" in (*__df_prompt*) ;; (*)",
+                " PROMPT_COMMAND=\"__df_prompt${{PROMPT_COMMAND:+; $PROMPT_COMMAND}}\" ;; esac;",
                 " fi;",
                 " printf '{}' 2>/dev/null\n",
             ),
@@ -70,6 +77,7 @@ pub fn injection_script(shell: ShellKind, ready_marker: &str) -> Option<String> 
 
         ShellKind::Zsh => Some(format!(
             concat!(
+                " fc -p /dev/null 2>/dev/null\n",
                 " if [ -z \"${{DFLY_INJ:-}}\" ]; then export DFLY_INJ=1;",
                 " __df_host(){{ hostname 2>/dev/null || printf localhost; }};",
                 " __df_emit(){{ printf '\\033]7;file://%s%s\\007' \"$(__df_host)\" \"$PWD\"; }};",
@@ -77,6 +85,7 @@ pub fn injection_script(shell: ShellKind, ready_marker: &str) -> Option<String> 
                 " typeset -ga precmd_functions;",
                 " [[ \" ${{precmd_functions[*]}} \" == *\" __df_emit \"* ]] || precmd_functions+=(__df_emit);",
                 " fi;",
+                " fc -P 2>/dev/null\n",
                 " printf '{}' 2>/dev/null\n",
             ),
             ready_osc,
@@ -84,12 +93,14 @@ pub fn injection_script(shell: ShellKind, ready_marker: &str) -> Option<String> 
 
         ShellKind::Fish => Some(format!(
             concat!(
+                " set fish_private_mode 1 2>/dev/null\n",
                 " if not set -q DFLY_INJ;",
                 " set -gx DFLY_INJ 1;",
                 " function __df_emit --on-event fish_prompt;",
                 " printf '\\033]7;file://%s%s\\007' (hostname) $PWD;",
                 " end;",
                 " end;",
+                " set -e fish_private_mode 2>/dev/null\n",
                 " printf '{}' 2>/dev/null\n",
             ),
             ready_osc,
@@ -246,6 +257,40 @@ fn parse_osc7_payload(payload: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{build_ready_marker, injection_script, ShellKind};
+
+    #[test]
+    fn bash_injection_prunes_its_history_entry() {
+        let script = injection_script(ShellKind::Bash, &build_ready_marker("session-1"))
+            .expect("bash injection script");
+
+        assert!(script.contains("DFLY_PRUNE_HISTORY=1;"));
+        assert!(script.contains("history -d $((HISTCMD-1)) 2>/dev/null || true;"));
+        assert!(
+            script.contains("PROMPT_COMMAND=\"__df_prompt${PROMPT_COMMAND:+; $PROMPT_COMMAND}\"")
+        );
+        assert!(!script.contains("set +o history"));
+        assert!(!script.contains("set -o history"));
+    }
+
+    #[test]
+    fn interactive_shell_ready_marker_is_emitted_after_cleanup() {
+        let ready_marker = build_ready_marker("session-1");
+        let ready_pos = |script: &str| script.find("DflyReady:session-1").expect("ready marker");
+
+        let zsh = injection_script(ShellKind::Zsh, &ready_marker).expect("zsh injection script");
+        assert!(
+            zsh.find(" fc -P 2>/dev/null\n")
+                .expect("zsh history restore")
+                < ready_pos(&zsh)
+        );
+
+        let fish = injection_script(ShellKind::Fish, &ready_marker).expect("fish injection script");
+        assert!(
+            fish.find(" set -e fish_private_mode 2>/dev/null\n")
+                .expect("fish private mode cleanup")
+                < ready_pos(&fish)
+        );
+    }
 
     #[test]
     fn powershell_injection_uses_character_escapes() {
