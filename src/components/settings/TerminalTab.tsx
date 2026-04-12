@@ -109,6 +109,24 @@ export function TerminalTab() {
           />
         </SettingRow>
 
+        <SettingRow label={t("settings.showLineNumbers")} desc={t("settings.showLineNumbersDesc")}>
+          <SettingSwitch
+            checked={appSettings.terminal.show_line_numbers}
+            onChange={(v) =>
+              updateAppSettings({ terminal: { ...appSettings.terminal, show_line_numbers: v } })
+            }
+          />
+        </SettingRow>
+
+        <SettingRow label={t("settings.showTimestamps")} desc={t("settings.showTimestampsDesc")}>
+          <SettingSwitch
+            checked={appSettings.terminal.show_timestamps}
+            onChange={(v) =>
+              updateAppSettings({ terminal: { ...appSettings.terminal, show_timestamps: v } })
+            }
+          />
+        </SettingRow>
+
         <SettingRow label={t("settings.showRemoteStats")} desc={t("settings.showRemoteStatsDesc")}>
           <SettingSwitch
             checked={appSettings.ui.show_remote_stats ?? false}

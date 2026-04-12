@@ -5,7 +5,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { type ILinkHandler, Terminal } from "@xterm/xterm";
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useApp } from "@/context/AppContext";
 import { useTheme } from "@/context/ThemeContext";
@@ -20,6 +20,7 @@ import ActionLinkMenu from "./ActionLinkMenu";
 import ActionLinkTooltip from "./ActionLinkTooltip";
 import CommandSuggestions from "./CommandSuggestions";
 import TerminalContextMenu from "./TerminalContextMenu";
+import TerminalGutter from "./TerminalGutter";
 import TerminalSearchBar from "./TerminalSearchBar";
 import "@xterm/xterm/css/xterm.css";
 
@@ -45,10 +46,14 @@ export default function XTerminal({
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
+  const [terminalReady, setTerminalReady] = useState(false);
 
   const { terminalTheme } = useTheme();
   const { t } = useTranslation();
   const { appSettings } = useApp();
+  const showLineNumbers = appSettings.terminal.show_line_numbers;
+  const showTimestamps = appSettings.terminal.show_timestamps;
+  const showGutter = showLineNumbers || showTimestamps;
 
   const currentLineRef = useRef("");
   const appSettingsRef = useRef(appSettings);
@@ -57,9 +62,14 @@ export default function XTerminal({
   const sendInputRef = useRef<((data: string) => void) | null>(null);
   const disconnectedRef = useRef(false);
   const reconnectingRef = useRef(false);
+  const outputWriteQueueRef = useRef(Promise.resolve());
+  const lineTimestampsRef = useRef<Map<number, number>>(new Map());
   const connectionIdRef = useRef(connectionId);
   const onReconnectedRef = useRef(onReconnected);
   const sessionIdRef = useRef(sessionId);
+  const visibleRef = useRef(visible);
+  const pendingOutputRef = useRef("");
+  const pendingOutputFlushRef = useRef<number | null>(null);
 
   useEffect(() => {
     connectionIdRef.current = connectionId;
@@ -72,6 +82,10 @@ export default function XTerminal({
   useEffect(() => {
     sessionIdRef.current = sessionId;
   }, [sessionId]);
+
+  useEffect(() => {
+    visibleRef.current = visible;
+  }, [visible]);
 
   useEffect(() => {
     appSettingsRef.current = appSettings;
@@ -122,6 +136,9 @@ export default function XTerminal({
   // Create and setup terminal
   useEffect(() => {
     if (!containerRef.current) return;
+    setTerminalReady(false);
+    lineTimestampsRef.current = new Map();
+    let disposed = false;
 
     const terminal = new Terminal({
       scrollback: appSettings.terminal.scrollback_lines,
@@ -259,13 +276,9 @@ export default function XTerminal({
 
     searchAddonRef.current = searchAddon;
 
-    // Initial fit
-    requestAnimationFrame(() => {
-      fitAddon.fit();
-    });
-
     terminalRef.current = terminal;
     fitAddonRef.current = fitAddon;
+    const isTerminalAlive = () => !disposed && terminalRef.current === terminal;
     sendInputRef.current = (data: string) => {
       invoke("write_to_session", { sessionId, data }).catch(() => {});
     };
@@ -398,37 +411,153 @@ export default function XTerminal({
       if (si.fallbackNeedsDetection) {
         si.fallbackPromptEndX = terminal.buffer.active.cursorX;
       }
+
+      const terminalSettings = appSettingsRef.current?.terminal;
+      if (terminalSettings?.show_line_numbers || terminalSettings?.show_timestamps) {
+        window.dispatchEvent(
+          new CustomEvent("dragonfly:refresh-gutter", { detail: { sessionId } }),
+        );
+      }
     });
 
     let outputUnlisten: UnlistenFn | null = null;
     let closedUnlisten: UnlistenFn | null = null;
     let focusUnlisten: UnlistenFn | null = null;
 
-    const setupListeners = async () => {
-      outputUnlisten = await listen<string>(`terminal-output-${sessionId}`, (event) => {
-        terminal.write(event.payload);
+    const refreshGutter = () => {
+      if (!isTerminalAlive()) return;
+      const terminalSettings = appSettingsRef.current?.terminal;
+      if (!terminalSettings?.show_line_numbers && !terminalSettings?.show_timestamps) return;
+      window.dispatchEvent(new CustomEvent("dragonfly:refresh-gutter", { detail: { sessionId } }));
+    };
 
-        if (event.payload.includes("\n")) {
-          const si = shellIntegrationRef.current;
-          currentLineRef.current = "";
-          if (!si.enabled) {
-            si.fallbackNeedsDetection = true;
-          }
-          dismissSuggestions();
+    const stampWrittenLines = (from: number, to: number, ts: number) => {
+      if (!appSettingsRef.current?.terminal?.show_timestamps) return;
+
+      const map = lineTimestampsRef.current;
+      const start = Math.min(from, to);
+      const end = Math.max(from, to);
+
+      for (let y = start; y <= end; y += 1) {
+        if (!map.has(y)) {
+          map.set(y, ts);
         }
-      });
+      }
 
-      closedUnlisten = await listen<void>(`session-closed-${sessionId}`, () => {
+      const keepFrom = Math.max(0, start - 3000);
+      for (const key of Array.from(map.keys())) {
+        if (key < keepFrom) {
+          map.delete(key);
+        }
+      }
+
+      refreshGutter();
+    };
+
+    const flushPendingOutput = () => {
+      pendingOutputFlushRef.current = null;
+      const payload = pendingOutputRef.current;
+      if (!payload) return;
+      pendingOutputRef.current = "";
+      if (!isTerminalAlive()) return;
+
+      outputWriteQueueRef.current = outputWriteQueueRef.current
+        .catch(() => {})
+        .then(
+          () =>
+            new Promise<void>((resolve) => {
+              if (!isTerminalAlive()) {
+                resolve();
+                return;
+              }
+
+              const ts = Date.now();
+              const beforeLine = terminal.buffer.active.baseY + terminal.buffer.active.cursorY;
+
+              try {
+                terminal.write(payload, () => {
+                  if (!isTerminalAlive()) {
+                    resolve();
+                    return;
+                  }
+
+                  const afterLine = terminal.buffer.active.baseY + terminal.buffer.active.cursorY;
+
+                  stampWrittenLines(beforeLine, afterLine, ts);
+
+                  if (payload.includes("\n")) {
+                    const si = shellIntegrationRef.current;
+                    currentLineRef.current = "";
+                    if (!si.enabled) {
+                      si.fallbackNeedsDetection = true;
+                    }
+                    dismissSuggestions();
+                  }
+
+                  if (!visibleRef.current) {
+                    window.dispatchEvent(
+                      new CustomEvent("dragonfly:session-output", { detail: { sessionId } }),
+                    );
+                  }
+
+                  resolve();
+
+                  if (
+                    isTerminalAlive() &&
+                    pendingOutputRef.current &&
+                    pendingOutputFlushRef.current === null
+                  ) {
+                    pendingOutputFlushRef.current = requestAnimationFrame(flushPendingOutput);
+                  }
+                });
+              } catch {
+                resolve();
+              }
+            }),
+        );
+    };
+
+    const schedulePendingOutputFlush = () => {
+      if (!isTerminalAlive()) return;
+      if (pendingOutputFlushRef.current !== null) return;
+      pendingOutputFlushRef.current = requestAnimationFrame(flushPendingOutput);
+    };
+
+    const setupListeners = async () => {
+      const nextOutputUnlisten = await listen<string>(`terminal-output-${sessionId}`, (event) => {
+        if (!isTerminalAlive()) return;
+        pendingOutputRef.current += event.payload;
+        schedulePendingOutputFlush();
+      });
+      if (disposed) {
+        nextOutputUnlisten();
+        return;
+      }
+      outputUnlisten = nextOutputUnlisten;
+
+      const nextClosedUnlisten = await listen<void>(`session-closed-${sessionId}`, () => {
+        if (!isTerminalAlive()) return;
         disconnectedRef.current = true;
         terminal.write(`\r\n\x1b[31m[${tRef.current("terminal.sessionDisconnected")}]\x1b[0m\r\n`);
         if (connectionIdRef.current) {
           terminal.write(`\x1b[33m[${tRef.current("terminal.pressEnterToReconnect")}]\x1b[0m\r\n`);
         }
       });
+      if (disposed) {
+        nextClosedUnlisten();
+        return;
+      }
+      closedUnlisten = nextClosedUnlisten;
 
-      focusUnlisten = await listen<void>(`focus-terminal-${sessionId}`, () => {
+      const nextFocusUnlisten = await listen<void>(`focus-terminal-${sessionId}`, () => {
+        if (!isTerminalAlive()) return;
         terminal.focus();
       });
+      if (disposed) {
+        nextFocusUnlisten();
+        return;
+      }
+      focusUnlisten = nextFocusUnlisten;
 
       try {
         await invoke("attach_session", { sessionId });
@@ -565,9 +694,12 @@ export default function XTerminal({
 
     const resizeDisposable = terminal.onResize(({ cols, rows }) => {
       invoke("resize_session", { sessionId, cols, rows }).catch(() => {});
+      refreshGutter();
     });
+
     const scrollDisposable = terminal.onScroll(() => {
       removeLinkPopup();
+      refreshGutter();
     });
 
     const observer = new ResizeObserver((entries) => {
@@ -617,7 +749,20 @@ export default function XTerminal({
     containerRef.current.addEventListener("mouseup", handleMiddleClick);
     const containerEl = containerRef.current;
 
+    requestAnimationFrame(() => {
+      if (!isTerminalAlive()) return;
+      fitAddon.fit();
+      requestAnimationFrame(() => {
+        if (!isTerminalAlive()) return;
+        terminal.refresh(0, Math.max(0, terminal.rows - 1));
+        setTerminalReady(true);
+        refreshGutter();
+      });
+    });
+
     return () => {
+      disposed = true;
+      setTerminalReady(false);
       containerEl.removeEventListener("mousedown", handleMiddleMouseDown);
       containerEl.removeEventListener("mouseup", handleMiddleClick);
       if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
@@ -640,6 +785,12 @@ export default function XTerminal({
       if (outputUnlisten) outputUnlisten();
       if (closedUnlisten) closedUnlisten();
       if (focusUnlisten) focusUnlisten();
+      if (pendingOutputFlushRef.current !== null) {
+        cancelAnimationFrame(pendingOutputFlushRef.current);
+        pendingOutputFlushRef.current = null;
+      }
+      pendingOutputRef.current = "";
+      outputWriteQueueRef.current = Promise.resolve();
       terminal.dispose();
       terminalRef.current = null;
       fitAddonRef.current = null;
@@ -664,6 +815,20 @@ export default function XTerminal({
     sessionId,
     sendInputRef,
   );
+
+  useEffect(() => {
+    if (terminalReady && fitAddonRef.current && terminalRef.current) {
+      requestAnimationFrame(() => {
+        fitAddonRef.current?.fit();
+        terminalRef.current?.refresh(0, Math.max(0, terminalRef.current.rows - 1));
+        if (showGutter) {
+          window.dispatchEvent(
+            new CustomEvent("dragonfly:refresh-gutter", { detail: { sessionId } }),
+          );
+        }
+      });
+    }
+  }, [sessionId, showGutter, terminalReady]);
 
   // Re-fit and focus when tab becomes active
   useEffect(() => {
@@ -712,31 +877,42 @@ export default function XTerminal({
   }, [doFind]);
 
   return (
-    <div className="h-full w-full relative" style={{ display: visible ? "block" : "none" }}>
-      <TerminalContextMenu terminalRef={terminalRef} onFind={doFind}>
-        <div ref={containerRef} className="h-full w-full" />
-      </TerminalContextMenu>
+    <div className="h-full w-full relative flex" style={{ display: visible ? "flex" : "none" }}>
+      {showGutter && terminalReady && (
+        <TerminalGutter
+          terminalRef={terminalRef}
+          showLineNumbers={showLineNumbers}
+          showTimestamps={showTimestamps}
+          lineTimestamps={lineTimestampsRef.current}
+          sessionId={sessionId}
+        />
+      )}
+      <div className="flex-1 min-w-0 h-full relative">
+        <TerminalContextMenu terminalRef={terminalRef} onFind={doFind}>
+          <div ref={containerRef} className="h-full w-full" />
+        </TerminalContextMenu>
 
-      <TerminalSearchBar
-        show={showSearchBar}
-        searchQuery={searchQuery}
-        setSearchQuery={setSearchQuery}
-        onNext={handleSearchNext}
-        onPrev={handleSearchPrev}
-        onClose={handleCloseSearch}
-      />
+        <TerminalSearchBar
+          show={showSearchBar}
+          searchQuery={searchQuery}
+          setSearchQuery={setSearchQuery}
+          onNext={handleSearchNext}
+          onPrev={handleSearchPrev}
+          onClose={handleCloseSearch}
+        />
 
-      <CommandSuggestions
-        suggestions={suggestions}
-        visible={showSuggestions}
-        selectedIndex={selectedIndex}
-        cursorPosition={cursorPosition}
-        onSelect={handleSelectSuggestion}
-        onDismiss={dismissSuggestions}
-      />
+        <CommandSuggestions
+          suggestions={suggestions}
+          visible={showSuggestions}
+          selectedIndex={selectedIndex}
+          cursorPosition={cursorPosition}
+          onSelect={handleSelectSuggestion}
+          onDismiss={dismissSuggestions}
+        />
 
-      <ActionLinkTooltip state={tooltipState} />
-      <ActionLinkMenu state={menuState} onClose={closeMenu} />
+        <ActionLinkTooltip state={tooltipState} />
+        <ActionLinkMenu state={menuState} onClose={closeMenu} />
+      </div>
     </div>
   );
 }
