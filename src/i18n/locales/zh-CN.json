@@ -1189,6 +1189,7 @@
     "actionLinkKind_ip": "IPv4",
     "actionLinkKind_url": "URL",
     "aiExecuting": "AI 正在执行命令...",
+    "allSessions": "所有会话(A)",
     "click": "单击",
     "connectionFailed": "连接失败",
     "largeOutputProtectionActive": "大流量输出保护已启用",
@@ -1197,10 +1198,16 @@
     "largeOutputProtectionRecoveredDetail": "终端已恢复可响应，过载期间共跳过 {{skipped}} 个排队字符。",
     "linkOpenHint": "按住 {{modifier}} 并点击以打开链接",
     "newConnection": "新建连接",
+    "newSession": "新建会话",
+    "noRecentSessions": "没有最近的会话",
+    "noSavedSessions": "没有已保存的会话",
+    "noShellSessions": "没有已保存的 Shell 会话",
     "pressEnterToReconnect": "按回车键重新连接",
+    "recentSessions": "最近的会话",
     "reconnectFailed": "重新连接失败",
     "reconnecting": "正在重新连接...",
-    "sessionDisconnected": "会话已断开"
+    "sessionDisconnected": "会话已断开",
+    "shellSessions": "Shell会话"
   },
   "terminalCtx": {
     "clearAll": "全部清除",

@@ -1189,6 +1189,7 @@
     "actionLinkKind_ip": "IPv4",
     "actionLinkKind_url": "URL",
     "aiExecuting": "AI is executing a command...",
+    "allSessions": "All Sessions (A)",
     "click": "Click",
     "connectionFailed": "Connection failed",
     "largeOutputProtectionActive": "Large-output protection is active",
@@ -1197,10 +1198,16 @@
     "largeOutputProtectionRecoveredDetail": "The terminal is responsive again. Skipped {{skipped}} queued characters during overload.",
     "linkOpenHint": "{{modifier}}+Click to open link",
     "newConnection": "New Connection",
+    "newSession": "New Session",
+    "noRecentSessions": "No recent sessions",
+    "noSavedSessions": "No saved sessions",
+    "noShellSessions": "No saved shell sessions",
     "pressEnterToReconnect": "Press Enter to reconnect",
+    "recentSessions": "Recent Sessions",
     "reconnectFailed": "Reconnect failed",
     "reconnecting": "Reconnecting...",
-    "sessionDisconnected": "Session disconnected"
+    "sessionDisconnected": "Session disconnected",
+    "shellSessions": "Shell Sessions"
   },
   "terminalCtx": {
     "clearAll": "Clear All",
