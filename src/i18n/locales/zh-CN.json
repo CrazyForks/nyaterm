@@ -820,7 +820,7 @@
     "globalShortcutsDesc": "在应用程序任何位置都可用的快捷键操作。",
     "groupSecurity": "安全认证",
     "groupSyncBackup": "同步与备份",
-    "groupTerminalSession": "终端与会话",
+    "groupTerminalSession": "终端",
     "groupTransfer": "数据传输",
     "groupWorkspace": "工作区",
     "hardwareAcceleration": "硬件加速",
