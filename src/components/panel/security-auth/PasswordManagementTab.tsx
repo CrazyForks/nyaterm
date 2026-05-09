@@ -14,9 +14,14 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { invoke } from "@/lib/invoke";
 import type { SavedPassword } from "@/types/global";
+import { SecretUnlockFooter } from "./SecretUnlockFooter";
 
 interface PasswordManagementTabProps {
   onCountChange?: (count: number) => void;
+  secretsUnlocked?: boolean;
+  onLockSecrets?: () => void;
+  onUnlockSecrets?: () => void;
+  showSecretUnlockFooter?: boolean;
 }
 
 interface PasswordEditorProps {
@@ -81,9 +86,16 @@ function PasswordEditor({
   );
 }
 
-export function PasswordManagementTab({ onCountChange }: PasswordManagementTabProps) {
+export function PasswordManagementTab({
+  onCountChange,
+  secretsUnlocked = false,
+  onLockSecrets,
+  onUnlockSecrets,
+  showSecretUnlockFooter = false,
+}: PasswordManagementTabProps) {
   const { t } = useTranslation();
   const [passwords, setPasswords] = useState<SavedPassword[]>([]);
+  const [visiblePasswords, setVisiblePasswords] = useState<Record<string, string>>({});
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
   const [editPassword, setEditPassword] = useState("");
@@ -106,6 +118,33 @@ export function PasswordManagementTab({ onCountChange }: PasswordManagementTabPr
   useEffect(() => {
     loadPasswords();
   }, [loadPasswords]);
+
+  useEffect(() => {
+    if (!secretsUnlocked) {
+      setVisiblePasswords({});
+      return;
+    }
+
+    let cancelled = false;
+    Promise.all(
+      passwords.map(async (entry) => {
+        if (!entry.has_password) return [entry.id, ""] as const;
+        try {
+          const value = await invoke<string | null>("get_saved_password_value", { id: entry.id });
+          return [entry.id, value ?? ""] as const;
+        } catch {
+          return [entry.id, ""] as const;
+        }
+      }),
+    ).then((values) => {
+      if (cancelled) return;
+      setVisiblePasswords(Object.fromEntries(values));
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [passwords, secretsUnlocked]);
 
   const resetEdit = () => {
     editRequestRef.current += 1;
@@ -175,89 +214,111 @@ export function PasswordManagementTab({ onCountChange }: PasswordManagementTabPr
     setDeletingEntry(null);
   };
 
+  const rootClassName = showSecretUnlockFooter ? "flex min-h-0 flex-1 flex-col" : "space-y-6";
+  const contentClassName = showSecretUnlockFooter
+    ? "min-h-0 flex-1 overflow-y-auto px-3 pb-3 terminal-scroll"
+    : "";
+
   return (
-    <div className="space-y-6">
-      <div className="space-y-2">
-        <div className="flex items-center justify-between">
-          <Label className="font-medium text-sm">{t("passwordManager.title")}</Label>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="text-primary h-7 px-2 text-xs"
-            onClick={handleAdd}
-            disabled={editingId !== null}
-          >
-            <MdAdd className="text-base mr-1" /> {t("passwordManager.add")}
-          </Button>
-        </div>
+    <div className={rootClassName}>
+      <div className={contentClassName}>
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <Label className="font-medium text-sm">{t("passwordManager.title")}</Label>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-primary h-7 px-2 text-xs"
+              onClick={handleAdd}
+              disabled={editingId !== null}
+            >
+              <MdAdd className="text-base mr-1" /> {t("passwordManager.add")}
+            </Button>
+          </div>
 
-        <div className="border rounded-md overflow-hidden">
-          {isNew && editingId === "__new__" && (
-            <PasswordEditor
-              editHasPassword={editHasPassword}
-              editName={editName}
-              editPassword={editPassword}
-              isEditing={false}
-              passwordLoading={passwordLoading}
-              onCancel={resetEdit}
-              onNameChange={setEditName}
-              onPasswordChange={setEditPassword}
-              onSave={handleSave}
-              saveDisabled={passwordLoading || !editName.trim() || !editPassword}
-              t={t}
-            />
-          )}
+          <div className="border rounded-md overflow-hidden">
+            {isNew && editingId === "__new__" && (
+              <PasswordEditor
+                editHasPassword={editHasPassword}
+                editName={editName}
+                editPassword={editPassword}
+                isEditing={false}
+                passwordLoading={passwordLoading}
+                onCancel={resetEdit}
+                onNameChange={setEditName}
+                onPasswordChange={setEditPassword}
+                onSave={handleSave}
+                saveDisabled={passwordLoading || !editName.trim() || !editPassword}
+                t={t}
+              />
+            )}
 
-          {passwords.map((entry) => (
-            <div key={entry.id}>
-              {editingId === entry.id && !isNew ? (
-                <PasswordEditor
-                  editHasPassword={editHasPassword}
-                  editName={editName}
-                  editPassword={editPassword}
-                  isEditing={true}
-                  passwordLoading={passwordLoading}
-                  onCancel={resetEdit}
-                  onNameChange={setEditName}
-                  onPasswordChange={setEditPassword}
-                  onSave={handleSave}
-                  saveDisabled={passwordLoading || !editName.trim()}
-                  t={t}
-                />
-              ) : (
-                <div className="flex items-center gap-2 px-3 py-2.5 border-b last:border-0 hover:bg-accent transition-colors">
-                  <span className="flex-1 text-xs truncate">{entry.name}</span>
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    onClick={() => {
-                      void handleEdit(entry);
-                    }}
-                    disabled={editingId !== null}
-                  >
-                    <MdEdit className="text-base" />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    className="text-destructive hover:bg-destructive/10"
-                    onClick={() => setDeletingEntry(entry)}
-                    disabled={editingId !== null}
-                  >
-                    <MdDelete className="text-base" />
-                  </Button>
-                </div>
-              )}
-            </div>
-          ))}
+            {passwords.map((entry) => (
+              <div key={entry.id}>
+                {editingId === entry.id && !isNew ? (
+                  <PasswordEditor
+                    editHasPassword={editHasPassword}
+                    editName={editName}
+                    editPassword={editPassword}
+                    isEditing={true}
+                    passwordLoading={passwordLoading}
+                    onCancel={resetEdit}
+                    onNameChange={setEditName}
+                    onPasswordChange={setEditPassword}
+                    onSave={handleSave}
+                    saveDisabled={passwordLoading || !editName.trim()}
+                    t={t}
+                  />
+                ) : (
+                  <div className="flex items-center gap-2 px-3 py-2.5 border-b last:border-0 hover:bg-accent transition-colors">
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-xs">{entry.name}</div>
+                      {secretsUnlocked ? (
+                        <div className="mt-1 truncate font-mono text-[0.6875rem] text-muted-foreground">
+                          {visiblePasswords[entry.id] || t("secretUnlock.emptySecret")}
+                        </div>
+                      ) : null}
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      onClick={() => {
+                        void handleEdit(entry);
+                      }}
+                      disabled={editingId !== null}
+                    >
+                      <MdEdit className="text-base" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      className="text-destructive hover:bg-destructive/10"
+                      onClick={() => setDeletingEntry(entry)}
+                      disabled={editingId !== null}
+                    >
+                      <MdDelete className="text-base" />
+                    </Button>
+                  </div>
+                )}
+              </div>
+            ))}
 
-          {passwords.length === 0 && !isNew && (
-            <div className="text-center py-6 text-xs text-muted-foreground">
-              {t("passwordManager.noPasswords")}
-            </div>
-          )}
+            {passwords.length === 0 && !isNew && (
+              <div className="text-center py-6 text-xs text-muted-foreground">
+                {t("passwordManager.noPasswords")}
+              </div>
+            )}
+          </div>
         </div>
       </div>
+
+      {showSecretUnlockFooter ? (
+        <SecretUnlockFooter
+          unlocked={secretsUnlocked}
+          onLock={onLockSecrets ?? (() => {})}
+          onUnlocked={onUnlockSecrets ?? (() => {})}
+        />
+      ) : null}
 
       <Dialog open={deletingEntry !== null} onOpenChange={(v) => !v && setDeletingEntry(null)}>
         <DialogContent showCloseButton={false} className="max-w-sm">
