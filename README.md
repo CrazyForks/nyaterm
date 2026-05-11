@@ -62,36 +62,6 @@ NyaTerm includes an AI Assistant panel for command generation, terminal output e
 
 ---
 
-# Contents
-
-- [AI Assistant](#ai-assistant)
-  - [What It Can Do](#what-it-can-do)
-- [Contents](#contents)
-- [What is NyaTerm](#what-is-nyaterm)
-- [Why NyaTerm](#why-nyaterm)
-- [Features](#features)
-  - [Sessions and Workspace](#sessions-and-workspace)
-  - [Terminal Experience](#terminal-experience)
-  - [SFTP and File Workflows](#sftp-and-file-workflows)
-  - [Security, Authentication, and Networking](#security-authentication-and-networking)
-  - [Sync, Backup, and Migration](#sync-backup-and-migration)
-- [Screenshots](#screenshots)
-  - [Workspace](#workspace)
-  - [Terminal Enhancements](#terminal-enhancements)
-  - [Remote Files](#remote-files)
-  - [Security and Network Tools](#security-and-network-tools)
-  - [Sync and Backup](#sync-and-backup)
-- [Supported Platforms](#supported-platforms)
-- [Supported Session Types](#supported-session-types)
-- [Getting Started](#getting-started)
-  - [Download](#download)
-  - [Prerequisites for Development](#prerequisites-for-development)
-  - [Development](#development)
-  - [Project Structure](#project-structure)
-- [License](#license)
-
----
-
 <a name="what-is-nyaterm"></a>
 # What is NyaTerm
 
