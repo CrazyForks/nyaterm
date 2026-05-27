@@ -25,7 +25,9 @@ import { invoke } from "@/lib/invoke";
 import { hexLuminance } from "@/lib/keywordHighlightPresets";
 import { logger } from "@/lib/logger";
 import {
+  buildTerminalCommandInput,
   listenSessionInputPreview,
+  normalizeTerminalCommandInput,
   type SessionInputPreview,
   sendSessionInput,
   sendSessionInputWithSync,
@@ -397,7 +399,7 @@ export default function XTerminal({
       const input = replaceCurrentLine
         ? `\u0005\u0015${command}`
         : `${"\x7f".repeat(trackedState.value.length)}${command}`;
-      void sendSessionInput(sessionId, execute ? `${input}\r` : input, {
+      void sendSessionInput(sessionId, buildTerminalCommandInput(input, execute), {
         preview: execute
           ? { kind: "replace-and-execute", value: command }
           : { kind: "replace", value: command },
@@ -670,7 +672,7 @@ export default function XTerminal({
 
     const replaceInputCommand = (command: string) => {
       const input = buildReplaceInputData(command);
-      void sendSessionInput(sessionId, input, {
+      void sendSessionInput(sessionId, normalizeTerminalCommandInput(input), {
         preview: { kind: "replace", value: command },
         registerSubmission: null,
       }).catch(() => {});
@@ -678,7 +680,7 @@ export default function XTerminal({
 
     const executeInputCommand = async (command: string) => {
       const input = buildReplaceInputData(command);
-      await sendSessionInput(sessionId, input, {
+      await sendSessionInput(sessionId, normalizeTerminalCommandInput(input), {
         preview: { kind: "replace-and-execute", value: command },
         registerSubmission: null,
       });
@@ -698,7 +700,7 @@ export default function XTerminal({
       getInputBuffer: () => inputStateRef.current.value,
       insertCommand: async (command) => {
         const input = buildReplaceInputData(command);
-        await sendSessionInput(sessionId, input, {
+        await sendSessionInput(sessionId, normalizeTerminalCommandInput(input), {
           preview: { kind: "replace", value: command },
           registerSubmission: null,
         });

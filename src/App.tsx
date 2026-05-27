@@ -27,7 +27,11 @@ import {
 import { getErrorMessage, shouldPromptConnectionEditOnFailure } from "./lib/errors";
 import { invoke } from "./lib/invoke";
 import { logger } from "./lib/logger";
-import { clearSessionCommandHistory, sendSessionInput } from "./lib/sessionInput";
+import {
+  buildTerminalCommandInput,
+  clearSessionCommandHistory,
+  sendSessionInput,
+} from "./lib/sessionInput";
 import { buildSmartSplitLayout, type SmartSplitMode } from "./lib/smartSplit";
 import { purgeSessionFromGroups } from "./lib/syncInputGroups";
 import {
@@ -709,7 +713,7 @@ function App() {
       if (activePane && !activePane.connecting) {
         if (activePane.connectError) return;
         const { sessionId } = activePane;
-        void sendSessionInput(sessionId, execute ? `${command}\r` : command, {
+        void sendSessionInput(sessionId, buildTerminalCommandInput(command, execute), {
           preview: execute ? { kind: "reset" } : { kind: "data", data: command },
           registerSubmission: execute ? command : null,
         }).catch(() => {});
@@ -727,7 +731,7 @@ function App() {
         for (const pane of collectSessionPanes(tab.root)) {
           if (!hasLiveSession(pane) || pane.type !== "SSH") continue;
           const { sessionId } = pane;
-          void sendSessionInput(sessionId, `${command}\r`, {
+          void sendSessionInput(sessionId, buildTerminalCommandInput(command), {
             preview: { kind: "reset" },
             registerSubmission: command,
           }).catch(() => {});
