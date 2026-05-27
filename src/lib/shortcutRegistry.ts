@@ -198,11 +198,10 @@ export function formatKeysForDisplay(keys: string): string {
     .join("+");
 }
 
-/** Format the tab index shortcut using only the configurable prefix, since the label supplies 1-9. */
+/** Format the tab index shortcut as its generated range, e.g. `Ctrl+1-9`. */
 export function formatIndexedKeysForDisplay(keys: string): string {
   const first = keys.split(",")[0].trim();
-  const prefix = first.replace(/\+(?:1-9|[1-9])$/i, "");
-  return formatKeysForDisplay(prefix || first);
+  return formatKeysForDisplay(first.replace(/\+1$/i, "+1-9"));
 }
 
 /** Expand a tab index shortcut template into concrete key combinations for a numbered tab. */
@@ -222,6 +221,25 @@ export function resolveIndexedKeys(keys: string, tabNumber: number): string {
     })
     .filter(Boolean)
     .join(", ");
+}
+
+/** A numbered-tab template must be a chord whose captured terminal key is `1`. */
+export function isValidIndexedShortcutTemplate(keys: string): boolean {
+  const combos = keys
+    .split(",")
+    .map((combo) => combo.trim())
+    .filter(Boolean);
+
+  return (
+    combos.length > 0 &&
+    combos.every((combo) => {
+      const parts = combo
+        .split("+")
+        .map((key) => key.trim().toLowerCase())
+        .filter(Boolean);
+      return parts.length > 1 && parts[parts.length - 1] === "1";
+    })
+  );
 }
 
 function isModifierOnlyCombo(combo: string): boolean {
