@@ -26,17 +26,14 @@ pub(super) const KNOWN_HOST_PREFIX: &str = "known_hosts/";
 pub(super) const KNOWN_HOST_RAW_PREFIX: &str = "known_hosts/raw/";
 pub(super) const COMMAND_HISTORY_PREFIX: &str = "command_history/";
 
-pub(super) const JSON_DOCS_TABLE: TableDefinition<&str, &str> =
-    TableDefinition::new("json_docs");
-pub(super) const TEXT_DOCS_TABLE: TableDefinition<&str, &str> =
-    TableDefinition::new("text_docs");
+pub(super) const JSON_DOCS_TABLE: TableDefinition<&str, &str> = TableDefinition::new("json_docs");
+pub(super) const TEXT_DOCS_TABLE: TableDefinition<&str, &str> = TableDefinition::new("text_docs");
 pub const META_TABLE: TableDefinition<&str, &str> = TableDefinition::new("meta");
 pub const SETTINGS_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("settings");
 pub const GROUPS_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("groups");
 pub const CONNECTIONS_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("connections");
 pub const CREDENTIALS_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("credentials");
-pub const OTP_ACCOUNTS_TABLE: TableDefinition<&str, &[u8]> =
-    TableDefinition::new("otp_accounts");
+pub const OTP_ACCOUNTS_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("otp_accounts");
 pub const PROXIES_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("proxies");
 pub const TUNNELS_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("tunnels");
 pub const KNOWN_HOSTS_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("known_hosts");

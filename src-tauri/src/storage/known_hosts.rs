@@ -1,14 +1,14 @@
+use crate::error::AppResult;
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
-use crate::error::AppResult;
 use hmac::Mac;
 use redb::ReadableTable;
 
 use super::history::history_id;
 use super::tables::*;
 use super::util::*;
-use super::Storage;
 use super::KnownHostCheck;
+use super::Storage;
 
 impl Storage {
     pub fn check_known_host(

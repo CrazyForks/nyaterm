@@ -2,15 +2,15 @@
 
 #![allow(dead_code)]
 
-mod tables;
-mod util;
-mod settings_impl;
-mod sessions;
 mod credentials;
 mod history;
 mod known_hosts;
 mod master_key;
 mod migration;
+mod sessions;
+mod settings_impl;
+mod tables;
+mod util;
 
 #[cfg(test)]
 mod tests;
@@ -30,8 +30,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
-use tables::DATABASE_FILE;
 use migration::backup_database_before_migration_if_needed;
+use tables::DATABASE_FILE;
 use util::storage_error;
 
 static STORAGE: OnceLock<Arc<Storage>> = OnceLock::new();

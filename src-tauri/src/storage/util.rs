@@ -200,11 +200,7 @@ pub(super) fn read_meta_u64_in_txn(
         })
         .transpose()
 }
-pub(super) fn write_meta_u32(
-    txn: &redb::WriteTransaction,
-    key: &str,
-    value: u32,
-) -> AppResult<()> {
+pub(super) fn write_meta_u32(txn: &redb::WriteTransaction, key: &str, value: u32) -> AppResult<()> {
     write_meta_string(txn, key, &value.to_string())
 }
 pub(super) fn write_meta_string(

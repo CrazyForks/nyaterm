@@ -356,9 +356,7 @@ fn remove_connection_index_entries_from_table(
     }
     Ok(())
 }
-pub(super) fn rebuild_all_connection_indexes_in_txn(
-    txn: &redb::WriteTransaction,
-) -> AppResult<()> {
+pub(super) fn rebuild_all_connection_indexes_in_txn(txn: &redb::WriteTransaction) -> AppResult<()> {
     clear_string_prefix_in_txn(txn, IDX_CONNECTIONS_BY_GROUP_TABLE, "")?;
     clear_string_prefix_in_txn(txn, IDX_CONNECTIONS_BY_LAST_USED_TABLE, "")?;
     clear_string_prefix_in_txn(txn, IDX_CONNECTIONS_BY_PROTOCOL_TABLE, "")?;
