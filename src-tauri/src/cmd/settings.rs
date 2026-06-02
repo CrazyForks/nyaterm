@@ -141,10 +141,13 @@ pub async fn persist_app_settings(
 #[tauri::command]
 pub fn save_app_ui_settings(ui: config::UiConfig) -> AppResult<()> {
     use crate::storage::{self, SettingsDocKey};
-    storage::update_settings_doc(SettingsDocKey::AppSettings, |settings: &mut config::AppSettings| {
-        settings.ui = ui;
-        Ok(())
-    })
+    storage::update_settings_doc(
+        SettingsDocKey::AppSettings,
+        |settings: &mut config::AppSettings| {
+            settings.ui = ui;
+            Ok(())
+        },
+    )
 }
 
 #[tauri::command]

@@ -529,6 +529,7 @@ export interface TransferSettings {
   default_editor: string;
   recording_path: string;
   recording_include_io_labels: boolean;
+  recording_include_timestamps: boolean;
   recording_memory_limit_bytes: number;
 }
 

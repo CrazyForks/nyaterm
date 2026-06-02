@@ -20,7 +20,7 @@ struct TranscriptRecord {
 impl TranscriptRecord {
     fn new(label: &'static str, data: String) -> Self {
         let timestamp = chrono_timestamp();
-        let size_bytes = format_record_parts(&timestamp, label, &data, true).len();
+        let size_bytes = format_record_parts(&timestamp, label, &data, true, true).len();
         Self {
             timestamp,
             label,
@@ -29,8 +29,14 @@ impl TranscriptRecord {
         }
     }
 
-    fn format(&self, include_io_labels: bool) -> String {
-        format_record_parts(&self.timestamp, self.label, &self.data, include_io_labels)
+    fn format(&self, include_io_labels: bool, include_timestamps: bool) -> String {
+        format_record_parts(
+            &self.timestamp,
+            self.label,
+            &self.data,
+            include_io_labels,
+            include_timestamps,
+        )
     }
 }
 
@@ -38,21 +44,30 @@ struct FileRecording {
     writer: BufWriter<File>,
     file_path: PathBuf,
     include_io_labels: bool,
+    include_timestamps: bool,
 }
 
 impl FileRecording {
-    fn new(file: File, file_path: PathBuf, include_io_labels: bool) -> Self {
+    fn new(
+        file: File,
+        file_path: PathBuf,
+        include_io_labels: bool,
+        include_timestamps: bool,
+    ) -> Self {
         Self {
             writer: BufWriter::new(file),
             file_path,
             include_io_labels,
+            include_timestamps,
         }
     }
 
     fn write_record(&mut self, record: &TranscriptRecord) {
-        let _ = self
-            .writer
-            .write_all(record.format(self.include_io_labels).as_bytes());
+        let _ = self.writer.write_all(
+            record
+                .format(self.include_io_labels, self.include_timestamps)
+                .as_bytes(),
+        );
     }
 
     fn finish(&mut self) {
@@ -97,12 +112,18 @@ impl SessionCaptureState {
         file: File,
         file_path: PathBuf,
         include_io_labels: bool,
+        include_timestamps: bool,
     ) -> AppResult<()> {
         if self.recording.is_some() {
             return Err(AppError::Config("Recording is already active".to_string()));
         }
         self.flush_output_lines(true);
-        self.recording = Some(FileRecording::new(file, file_path, include_io_labels));
+        self.recording = Some(FileRecording::new(
+            file,
+            file_path,
+            include_io_labels,
+            include_timestamps,
+        ));
         Ok(())
     }
 
@@ -307,6 +328,7 @@ impl RecordingManager {
         session_id: &str,
         file_path: &str,
         include_io_labels: bool,
+        include_timestamps: bool,
     ) -> AppResult<()> {
         let path = prepare_output_file_path(file_path)?;
         let file = File::create(&path)
@@ -318,7 +340,7 @@ impl RecordingManager {
             .entry(session_id.to_string())
             .or_insert_with(|| SessionCaptureState::new(memory_limit_bytes));
         state.set_memory_limit(memory_limit_bytes);
-        state.start_recording(file, path, include_io_labels)
+        state.start_recording(file, path, include_io_labels, include_timestamps)
     }
 
     pub fn stop(&self, session_id: &str) -> AppResult<String> {
@@ -334,6 +356,7 @@ impl RecordingManager {
         session_id: &str,
         file_path: &str,
         include_io_labels: bool,
+        include_timestamps: bool,
     ) -> AppResult<String> {
         let path = prepare_output_file_path(file_path)?;
         let records = {
@@ -350,7 +373,11 @@ impl RecordingManager {
         );
         for record in &records {
             writer
-                .write_all(record.format(include_io_labels).as_bytes())
+                .write_all(
+                    record
+                        .format(include_io_labels, include_timestamps)
+                        .as_bytes(),
+                )
                 .map_err(|e| AppError::Config(format!("Failed to write transcript file: {e}")))?;
         }
         writer
@@ -433,11 +460,13 @@ fn format_record_parts(
     label: &str,
     data: &str,
     include_io_labels: bool,
+    include_timestamps: bool,
 ) -> String {
-    if include_io_labels {
-        format!("[{timestamp}] [{label}] {data}\n")
-    } else {
-        format!("[{timestamp}] {data}\n")
+    match (include_timestamps, include_io_labels) {
+        (true, true) => format!("[{timestamp}] [{label}] {data}\n"),
+        (true, false) => format!("[{timestamp}] {data}\n"),
+        (false, true) => format!("[{label}] {data}\n"),
+        (false, false) => format!("{data}\n"),
     }
 }
 
@@ -615,7 +644,7 @@ mod tests {
     fn writes_recording_with_and_without_io_labels() {
         let manager = RecordingManager::new();
         let labeled_path = unique_path("labels");
-        manager.start("s1", &labeled_path, true).unwrap();
+        manager.start("s1", &labeled_path, true, true).unwrap();
         manager.write_input("s1", b"echo hi\r");
         manager.write_output("s1", "echo hi\r\nhi\n");
         manager.stop("s1").unwrap();
@@ -625,7 +654,7 @@ mod tests {
         assert!(labeled.contains("[OUTPUT] hi"));
 
         let plain_path = unique_path("plain");
-        manager.start("s1", &plain_path, false).unwrap();
+        manager.start("s1", &plain_path, false, true).unwrap();
         manager.write_output("s1", "done\n");
         manager.stop("s1").unwrap();
 
@@ -633,6 +662,30 @@ mod tests {
         assert!(!plain.contains("[INPUT]"));
         assert!(!plain.contains("[OUTPUT]"));
         assert!(plain.contains("done"));
+
+        let _ = fs::remove_file(labeled_path);
+        let _ = fs::remove_file(plain_path);
+    }
+
+    #[test]
+    fn writes_recording_without_timestamps() {
+        let manager = RecordingManager::new();
+
+        let labeled_path = unique_path("no-timestamp-labels");
+        manager.start("s1", &labeled_path, true, false).unwrap();
+        manager.write_output("s1", "done\n");
+        manager.stop("s1").unwrap();
+
+        let labeled = fs::read_to_string(&labeled_path).unwrap();
+        assert_eq!(labeled, "[OUTPUT] done\n");
+
+        let plain_path = unique_path("no-timestamp-plain");
+        manager.start("s1", &plain_path, false, false).unwrap();
+        manager.write_output("s1", "plain\n");
+        manager.stop("s1").unwrap();
+
+        let plain = fs::read_to_string(&plain_path).unwrap();
+        assert_eq!(plain, "plain\n");
 
         let _ = fs::remove_file(labeled_path);
         let _ = fs::remove_file(plain_path);
@@ -647,7 +700,7 @@ mod tests {
         manager.write_output("s1", "third line\n");
 
         let path = unique_path("memory");
-        manager.save_transcript("s1", &path, true).unwrap();
+        manager.save_transcript("s1", &path, true, true).unwrap();
         let saved = fs::read_to_string(&path).unwrap();
 
         assert!(!saved.contains("first line"));
@@ -662,7 +715,7 @@ mod tests {
         manager.write_output("s1", "before\n");
 
         let path = unique_path("no-backfill");
-        manager.start("s1", &path, true).unwrap();
+        manager.start("s1", &path, true, true).unwrap();
         manager.write_output("s1", "after\n");
         manager.stop("s1").unwrap();
 
@@ -679,7 +732,7 @@ mod tests {
         manager.write_output("s1", "prompt without newline");
 
         let path = unique_path("no-partial-backfill");
-        manager.start("s1", &path, true).unwrap();
+        manager.start("s1", &path, true, true).unwrap();
         manager.write_output("s1", "\nafter\n");
         manager.stop("s1").unwrap();
 

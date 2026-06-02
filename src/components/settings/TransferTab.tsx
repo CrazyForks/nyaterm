@@ -122,7 +122,13 @@ export function TransferTab() {
             { name: "Executable", extensions: ["exe", "cmd", "bat", "com", "app", "sh", ""] },
           ]}
         />
+      </SettingSection>
 
+      <SettingSection
+        title={t("settings.recordingSettings")}
+        desc={t("settings.recordingSettingsDesc")}
+        contentClassName="space-y-5"
+      >
         <PathPickerInput
           label={t("settings.recordingPath")}
           desc={t("settings.recordingPathDesc")}
@@ -138,6 +144,16 @@ export function TransferTab() {
           <SettingSwitch
             checked={transfer.recording_include_io_labels}
             onChange={(v) => update({ recording_include_io_labels: v })}
+          />
+        </SettingRow>
+
+        <SettingRow
+          label={t("settings.recordingIncludeTimestamps")}
+          desc={t("settings.recordingIncludeTimestampsDesc")}
+        >
+          <SettingSwitch
+            checked={transfer.recording_include_timestamps ?? true}
+            onChange={(v) => update({ recording_include_timestamps: v })}
           />
         </SettingRow>
 

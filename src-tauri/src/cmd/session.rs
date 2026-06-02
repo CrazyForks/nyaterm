@@ -390,11 +390,19 @@ pub async fn start_recording(
     session_id: String,
     file_path: String,
     include_io_labels: bool,
+    include_timestamps: bool,
 ) -> AppResult<()> {
     let mgr = state.inner().clone();
-    tokio::task::spawn_blocking(move || mgr.start(&session_id, &file_path, include_io_labels))
-        .await
-        .map_err(|e| AppError::Config(format!("Task join error: {e}")))?
+    tokio::task::spawn_blocking(move || {
+        mgr.start(
+            &session_id,
+            &file_path,
+            include_io_labels,
+            include_timestamps,
+        )
+    })
+    .await
+    .map_err(|e| AppError::Config(format!("Task join error: {e}")))?
 }
 
 #[tauri::command]
@@ -422,10 +430,16 @@ pub async fn save_session_transcript(
     session_id: String,
     file_path: String,
     include_io_labels: bool,
+    include_timestamps: bool,
 ) -> AppResult<String> {
     let mgr = state.inner().clone();
     tokio::task::spawn_blocking(move || {
-        mgr.save_transcript(&session_id, &file_path, include_io_labels)
+        mgr.save_transcript(
+            &session_id,
+            &file_path,
+            include_io_labels,
+            include_timestamps,
+        )
     })
     .await
     .map_err(|e| AppError::Config(format!("Task join error: {e}")))?

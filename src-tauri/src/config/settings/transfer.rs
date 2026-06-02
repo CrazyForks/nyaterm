@@ -31,6 +31,8 @@ pub struct TransferSettings {
     pub recording_path: String,
     #[serde(default = "default_true")]
     pub recording_include_io_labels: bool,
+    #[serde(default = "default_true")]
+    pub recording_include_timestamps: bool,
     #[serde(default = "default_recording_memory_limit_bytes")]
     pub recording_memory_limit_bytes: u64,
     #[serde(default = "default_true")]
@@ -72,6 +74,7 @@ impl Default for TransferSettings {
             default_editor: String::new(),
             recording_path: String::new(),
             recording_include_io_labels: true,
+            recording_include_timestamps: true,
             recording_memory_limit_bytes: default_recording_memory_limit_bytes(),
             zmodem_enabled: true,
         }

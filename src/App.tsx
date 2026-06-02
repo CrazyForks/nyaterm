@@ -1464,6 +1464,7 @@ function App() {
           sessionId,
           filePath,
           includeIoLabels: appSettings.transfer.recording_include_io_labels,
+          includeTimestamps: appSettings.transfer.recording_include_timestamps ?? true,
         });
         setRecordingSessions((prev) => {
           const next = new Set(prev);
@@ -1484,6 +1485,7 @@ function App() {
     },
     [
       appSettings.transfer.recording_include_io_labels,
+      appSettings.transfer.recording_include_timestamps,
       buildRecordingFilePath,
       recordingSessions,
       t,
@@ -1498,6 +1500,7 @@ function App() {
           sessionId: session.id,
           filePath,
           includeIoLabels: appSettings.transfer.recording_include_io_labels,
+          includeTimestamps: appSettings.transfer.recording_include_timestamps ?? true,
         });
         toast.success(t("recording.transcriptSaved", { path: savedPath }));
       } catch (error) {
@@ -1511,7 +1514,12 @@ function App() {
         toast.error(t("recording.saveFailed"));
       }
     },
-    [appSettings.transfer.recording_include_io_labels, buildRecordingFilePath, t],
+    [
+      appSettings.transfer.recording_include_io_labels,
+      appSettings.transfer.recording_include_timestamps,
+      buildRecordingFilePath,
+      t,
+    ],
   );
 
   // Resize handlers

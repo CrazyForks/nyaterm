@@ -249,6 +249,7 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
     default_editor: "",
     recording_path: "",
     recording_include_io_labels: true,
+    recording_include_timestamps: true,
     recording_memory_limit_bytes: 5 * 1024 * 1024,
   },
   diagnostics: {
