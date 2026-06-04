@@ -74,8 +74,8 @@ export default function DeleteDialog({ data, onClose, onSuccess }: DeleteDialogP
   return (
     <Dialog open onOpenChange={(v) => !v && !isSubmitting && onClose()}>
       <DialogContent className="w-[min(20rem,calc(100vw-2rem))] sm:max-w-80">
-        <DialogHeader>
-          <DialogTitle className="text-sm break-words">
+        <DialogHeader className="min-w-0 pr-8">
+          <DialogTitle className="text-sm break-all leading-relaxed">
             {data.items.length === 1
               ? t("fileExplorer.sureDelete", { name: data.items[0]?.name ?? "" })
               : t("fileExplorer.sureDeleteMultiple", { count: data.items.length })}
@@ -101,7 +101,7 @@ export default function DeleteDialog({ data, onClose, onSuccess }: DeleteDialogP
           </div>
         )}
 
-        <DialogFooter className="mt-4">
+        <DialogFooter className="mt-4 min-w-0">
           <Button variant="outline" size="sm" onClick={onClose} disabled={isSubmitting}>
             {t("dialog.cancel")}
           </Button>
