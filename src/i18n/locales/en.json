@@ -671,6 +671,7 @@
     "delete": "Delete",
     "deleteCategory": "Delete Category",
     "deleteCategoryConfirm": "Delete category '{{name}}' and its {{count}} commands?",
+    "deleteConfirm": "Delete quick command '{{name}}'? This can't be undone.",
     "description": "Desc. (optional)",
     "descriptionPlaceholder": "Command details",
     "edit": "Edit",
@@ -706,12 +707,14 @@
     "search": "Search cmd...",
     "searchOrCreateCategory": "Search or create...",
     "selectIcon": "Icon",
+    "send": "Send",
     "sendToAll": "Send to All",
     "sort": "Sort",
     "sortByCreated": "Created",
     "sortByName": "By name",
     "sortByUseCount": "Usage",
-    "uncategorized": "Uncat."
+    "uncategorized": "Uncat.",
+    "view": "View"
   },
   "recording": {
     "current": "Current",

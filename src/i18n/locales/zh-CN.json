@@ -671,6 +671,7 @@
     "delete": "删除",
     "deleteCategory": "删除分类",
     "deleteCategoryConfirm": "确定要删除分类「{{name}}」吗？其中 {{count}} 个快捷命令也会被删除。",
+    "deleteConfirm": "确定要删除快捷命令「{{name}}」吗？此操作无法撤销。",
     "description": "描述（可选）",
     "descriptionPlaceholder": "关于此命令的详细说明",
     "edit": "编辑",
@@ -706,12 +707,14 @@
     "search": "搜索命令...",
     "searchOrCreateCategory": "搜索或创建分类...",
     "selectIcon": "选择图标",
+    "send": "发送",
     "sendToAll": "发送到所有会话",
     "sort": "排序",
     "sortByCreated": "按创建时间",
     "sortByName": "按名称",
     "sortByUseCount": "按使用频次",
-    "uncategorized": "未分类"
+    "uncategorized": "未分类",
+    "view": "查看"
   },
   "recording": {
     "current": "当前",
