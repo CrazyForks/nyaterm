@@ -1,3 +1,5 @@
+import type { TFunction } from "i18next";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MdContentCopy, MdDelete, MdDriveFileRenameOutline, MdEdit, MdLink } from "react-icons/md";
 import {
   ContextMenu,
@@ -6,14 +8,155 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { SavedConnection } from "@/types/global";
 import { resolveConnectionIcon } from "../../icons";
 import { useSavedConnectionsContext } from "./context";
+
+const TOOLTIP_OPEN_DELAY_MS = 350;
 
 interface ConnectionItemProps {
   conn: SavedConnection;
   indented: boolean;
   depth?: number;
+}
+
+interface ConnectionDetailsTooltipProps {
+  conn: SavedConnection;
+  t: TFunction;
+}
+
+interface ConnectionDetailRow {
+  label: string;
+  value: string;
+  multiline?: boolean;
+}
+
+function formatRequiredDetailValue(
+  value: string | number | null | undefined,
+  t: TFunction,
+): string {
+  if (value === null || value === undefined) return t("savedConnections.notSet");
+  const text = String(value).trim();
+  return text || t("savedConnections.notSet");
+}
+
+function formatOptionalDetailValue(value: string | number | null | undefined): string | null {
+  if (value === null || value === undefined) return null;
+  const text = String(value).trim();
+  return text || null;
+}
+
+function getConnectionDetailRows(conn: SavedConnection, t: TFunction): ConnectionDetailRow[] {
+  const description =
+    formatOptionalDetailValue(conn.description) ?? t("savedConnections.noDescription");
+
+  switch (conn.type) {
+    case "local_terminal": {
+      const rows: ConnectionDetailRow[] = [
+        {
+          label: t("savedConnections.terminalPath"),
+          value: formatRequiredDetailValue(conn.shell_path, t),
+        },
+      ];
+      const shellArgs = formatOptionalDetailValue(conn.shell_args);
+      if (shellArgs) {
+        rows.push({ label: t("savedConnections.shellArgs"), value: shellArgs });
+      }
+      rows.push(
+        {
+          label: t("savedConnections.workingDir"),
+          value: formatRequiredDetailValue(conn.working_dir, t),
+        },
+        {
+          label: t("savedConnections.description"),
+          value: description,
+          multiline: true,
+        },
+      );
+      return rows;
+    }
+    case "telnet":
+      return [
+        { label: t("savedConnections.host"), value: formatRequiredDetailValue(conn.host, t) },
+        { label: t("savedConnections.port"), value: formatRequiredDetailValue(conn.port, t) },
+        {
+          label: t("savedConnections.description"),
+          value: description,
+          multiline: true,
+        },
+      ];
+    case "serial": {
+      const rows: ConnectionDetailRow[] = [
+        {
+          label: t("savedConnections.serialPort"),
+          value: formatRequiredDetailValue(conn.port_name, t),
+        },
+        {
+          label: t("savedConnections.baudRate"),
+          value: formatRequiredDetailValue(conn.baud_rate, t),
+        },
+        {
+          label: t("savedConnections.dataBits"),
+          value: formatRequiredDetailValue(conn.data_bits, t),
+        },
+      ];
+      const parity = formatOptionalDetailValue(conn.parity);
+      const stopBits = formatOptionalDetailValue(conn.stop_bits);
+      if (parity) rows.push({ label: t("savedConnections.parity"), value: parity });
+      if (stopBits) rows.push({ label: t("savedConnections.stopBits"), value: stopBits });
+      rows.push({
+        label: t("savedConnections.description"),
+        value: description,
+        multiline: true,
+      });
+      return rows;
+    }
+    default:
+      return [
+        { label: t("savedConnections.host"), value: formatRequiredDetailValue(conn.host, t) },
+        { label: t("savedConnections.port"), value: formatRequiredDetailValue(conn.port, t) },
+        { label: t("savedConnections.user"), value: formatRequiredDetailValue(conn.username, t) },
+        {
+          label: t("savedConnections.description"),
+          value: description,
+          multiline: true,
+        },
+      ];
+  }
+}
+
+function ConnectionDetailsTooltip({ conn, t }: ConnectionDetailsTooltipProps) {
+  const rows = useMemo(() => getConnectionDetailRows(conn, t), [conn, t]);
+
+  return (
+    <TooltipContent
+      side="right"
+      align="center"
+      sideOffset={6}
+      collisionPadding={12}
+      className="pointer-events-none w-[200px] max-w-[min(200px,calc(100vw-2rem))] px-2 py-1.5"
+    >
+      <div className="grid grid-cols-[4rem_minmax(0,1fr)] gap-x-2 gap-y-1.5">
+        {rows.map((row) => (
+          <div className="contents" key={row.label}>
+            <span className="text-[0.6875rem] leading-4 text-[var(--df-text-dimmed)]">
+              {row.label}
+            </span>
+            <span
+              className={`min-w-0 text-[0.6875rem] leading-4 text-[var(--df-text)] ${
+                row.multiline
+                  ? "overflow-hidden [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2]"
+                  : "truncate"
+              }`}
+            >
+              {row.value}
+            </span>
+          </div>
+        ))}
+      </div>
+    </TooltipContent>
+  );
 }
 
 export default function ConnectionItem({ conn, indented, depth = 0 }: ConnectionItemProps) {
@@ -53,6 +196,47 @@ export default function ConnectionItem({ conn, indented, depth = 0 }: Connection
   const directConnectLabel = t("savedConnections.connect");
   const iconStyle = { color: isSelected ? "var(--df-primary)" : iconDef.color };
   const indentLeft = indented ? `${8 + depth * 16 + 16}px` : "0.5rem";
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const detailsOpenTimerRef = useRef<number | null>(null);
+  const suppressDetailsUntilLeaveRef = useRef(false);
+
+  const clearDetailsOpenTimer = useCallback(() => {
+    if (detailsOpenTimerRef.current) {
+      window.clearTimeout(detailsOpenTimerRef.current);
+      detailsOpenTimerRef.current = null;
+    }
+  }, []);
+
+  const closeDetails = useCallback(
+    (suppressUntilLeave = false) => {
+      clearDetailsOpenTimer();
+      if (suppressUntilLeave) suppressDetailsUntilLeaveRef.current = true;
+      setDetailsOpen(false);
+    },
+    [clearDetailsOpenTimer],
+  );
+
+  const scheduleDetailsOpen = useCallback(() => {
+    if (suppressDetailsUntilLeaveRef.current) return;
+    clearDetailsOpenTimer();
+    detailsOpenTimerRef.current = window.setTimeout(() => {
+      if (!suppressDetailsUntilLeaveRef.current) {
+        setDetailsOpen(true);
+      }
+      detailsOpenTimerRef.current = null;
+    }, TOOLTIP_OPEN_DELAY_MS);
+  }, [clearDetailsOpenTimer]);
+
+  const handlePointerLeave = useCallback(() => {
+    suppressDetailsUntilLeaveRef.current = false;
+    closeDetails(false);
+  }, [closeDetails]);
+
+  const closeAndSuppressDetails = useCallback(() => {
+    closeDetails(true);
+  }, [closeDetails]);
+
+  useEffect(() => clearDetailsOpenTimer, [clearDetailsOpenTimer]);
 
   return (
     <ContextMenu>
@@ -60,7 +244,15 @@ export default function ConnectionItem({ conn, indented, depth = 0 }: Connection
         <div
           className="relative min-w-full w-max"
           draggable={isDragEnabled}
-          onDragStart={isDragEnabled ? (e) => handleDragStart(e, "connection", conn.id) : undefined}
+          onWheel={closeAndSuppressDetails}
+          onDragStart={
+            isDragEnabled
+              ? (e) => {
+                  closeAndSuppressDetails();
+                  handleDragStart(e, "connection", conn.id);
+                }
+              : undefined
+          }
           onDragEnter={
             isDragEnabled ? (e) => handleDragEnterItem(e, conn.id, "connection") : undefined
           }
@@ -71,7 +263,14 @@ export default function ConnectionItem({ conn, indented, depth = 0 }: Connection
             isDragEnabled ? (e) => handleDragLeaveItem(e, conn.id, "connection") : undefined
           }
           onDrop={isDragEnabled ? (e) => handleDropItem(e, conn.id, "connection") : undefined}
-          onDragEnd={isDragEnabled ? handleDragEnd : undefined}
+          onDragEnd={
+            isDragEnabled
+              ? () => {
+                  closeAndSuppressDetails();
+                  handleDragEnd();
+                }
+              : undefined
+          }
         >
           {showBefore && (
             <div
@@ -87,17 +286,37 @@ export default function ConnectionItem({ conn, indented, depth = 0 }: Connection
                 ? "color-mix(in srgb, var(--df-primary) 10%, transparent)"
                 : undefined,
             }}
-            onMouseDown={(e) => handleConnectionSelectionStart(conn, e)}
-            onContextMenu={(e) => handleConnectionContextMenu(conn, e)}
-            onDoubleClick={() => handleConnectOnly(conn)}
+            onMouseDown={(e) => {
+              closeAndSuppressDetails();
+              handleConnectionSelectionStart(conn, e);
+            }}
+            onContextMenu={(e) => {
+              closeAndSuppressDetails();
+              handleConnectionContextMenu(conn, e);
+            }}
+            onDoubleClick={() => {
+              closeAndSuppressDetails();
+              handleConnectOnly(conn);
+            }}
           >
-            <ConnIcon className="text-sm shrink-0" style={iconStyle} />
-            <span
-              className="shrink-0 whitespace-nowrap pr-16 text-xs font-medium"
-              style={{ color: isSelected ? "var(--df-primary)" : "var(--df-text)" }}
-            >
-              {conn.name}
-            </span>
+            <Tooltip open={detailsOpen}>
+              <TooltipTrigger asChild>
+                <span
+                  className="flex min-w-0 shrink-0 items-center gap-2 pr-16"
+                  onPointerEnter={scheduleDetailsOpen}
+                  onPointerLeave={handlePointerLeave}
+                >
+                  <ConnIcon className="text-sm shrink-0" style={iconStyle} />
+                  <span
+                    className="shrink-0 whitespace-nowrap text-xs font-medium"
+                    style={{ color: isSelected ? "var(--df-primary)" : "var(--df-text)" }}
+                  >
+                    {conn.name}
+                  </span>
+                </span>
+              </TooltipTrigger>
+              <ConnectionDetailsTooltip conn={conn} t={t} />
+            </Tooltip>
             <div
               className="pointer-events-none sticky right-2 z-10 ml-auto flex shrink-0 items-center gap-0.5 rounded px-1 opacity-0 backdrop-blur-sm transition-opacity group-hover/item:pointer-events-auto group-hover/item:opacity-100"
               style={{ backgroundColor: "var(--df-bg-hover)" }}
@@ -105,10 +324,15 @@ export default function ConnectionItem({ conn, indented, depth = 0 }: Connection
               <button
                 className="p-0.5 cursor-pointer transition-colors hover:opacity-80"
                 style={{ color: "var(--df-text-dimmed)" }}
-                title={directConnectLabel}
-                onMouseDown={(e) => e.stopPropagation()}
+                aria-label={directConnectLabel}
+                onPointerEnter={closeAndSuppressDetails}
+                onMouseDown={(e) => {
+                  e.stopPropagation();
+                  closeAndSuppressDetails();
+                }}
                 onClick={(e) => {
                   e.stopPropagation();
+                  closeAndSuppressDetails();
                   handleConnectOnly(conn);
                 }}
               >
@@ -117,10 +341,15 @@ export default function ConnectionItem({ conn, indented, depth = 0 }: Connection
               <button
                 className="p-0.5 cursor-pointer transition-colors hover:opacity-80"
                 style={{ color: "var(--df-text-dimmed)" }}
-                title={t("savedConnections.edit")}
-                onMouseDown={(e) => e.stopPropagation()}
+                aria-label={t("savedConnections.edit")}
+                onPointerEnter={closeAndSuppressDetails}
+                onMouseDown={(e) => {
+                  e.stopPropagation();
+                  closeAndSuppressDetails();
+                }}
                 onClick={(e) => {
                   e.stopPropagation();
+                  closeAndSuppressDetails();
                   onEditConnection(conn);
                 }}
               >
@@ -129,10 +358,15 @@ export default function ConnectionItem({ conn, indented, depth = 0 }: Connection
               <button
                 className="p-0.5 cursor-pointer hover:text-red-400 transition-colors"
                 style={{ color: "var(--df-text-dimmed)" }}
-                title={t("savedConnections.delete")}
-                onMouseDown={(e) => e.stopPropagation()}
+                aria-label={t("savedConnections.delete")}
+                onPointerEnter={closeAndSuppressDetails}
+                onMouseDown={(e) => {
+                  e.stopPropagation();
+                  closeAndSuppressDetails();
+                }}
                 onClick={(e) => {
                   e.stopPropagation();
+                  closeAndSuppressDetails();
                   setDeleteTarget(conn);
                 }}
               >
@@ -151,6 +385,7 @@ export default function ConnectionItem({ conn, indented, depth = 0 }: Connection
       <ContextMenuContent className="min-w-[160px]">
         <ContextMenuItem
           onClick={() => {
+            closeAndSuppressDetails();
             if (isSelected && selectedConnectionIds.size > 1) {
               handleConnectSelected();
               return;
@@ -161,13 +396,19 @@ export default function ConnectionItem({ conn, indented, depth = 0 }: Connection
           <MdLink className="text-[0.875rem] text-muted-foreground mr-2" />
           {connectLabel}
         </ContextMenuItem>
-        <ContextMenuItem onClick={() => onEditConnection(conn)}>
+        <ContextMenuItem
+          onClick={() => {
+            closeAndSuppressDetails();
+            onEditConnection(conn);
+          }}
+        >
           <MdEdit className="text-[0.875rem] text-muted-foreground mr-2" />
           {t("savedConnections.edit")}
         </ContextMenuItem>
         <ContextMenuSeparator />
         <ContextMenuItem
           onClick={() => {
+            closeAndSuppressDetails();
             setRenameValue(conn.name);
             setRenamingConn(conn);
           }}
@@ -175,12 +416,23 @@ export default function ConnectionItem({ conn, indented, depth = 0 }: Connection
           <MdDriveFileRenameOutline className="text-[0.875rem] text-muted-foreground mr-2" />
           {t("savedConnections.rename")}
         </ContextMenuItem>
-        <ContextMenuItem onClick={() => handleCopyConnection(conn)}>
+        <ContextMenuItem
+          onClick={() => {
+            closeAndSuppressDetails();
+            handleCopyConnection(conn);
+          }}
+        >
           <MdContentCopy className="text-[0.875rem] text-muted-foreground mr-2" />
           {t("savedConnections.copy")}
         </ContextMenuItem>
         <ContextMenuSeparator />
-        <ContextMenuItem className="text-red-400" onClick={() => setDeleteTarget(conn)}>
+        <ContextMenuItem
+          className="text-red-400"
+          onClick={() => {
+            closeAndSuppressDetails();
+            setDeleteTarget(conn);
+          }}
+        >
           <MdDelete className="text-[0.875rem] mr-2" />
           {t("savedConnections.delete")}
         </ContextMenuItem>
