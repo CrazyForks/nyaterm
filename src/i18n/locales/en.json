@@ -351,6 +351,7 @@
     "shellPathPlaceholder": "e.g. /bin/zsh or pwsh.exe",
     "shellPathRequired": "Shell path is required",
     "shellPowerShell": "PowerShell",
+    "shellWindowsTerminal": "Windows Terminal",
     "shellWsl": "WSL",
     "sshBackspaceModeDesc": "Controls the byte sent by Backspace in SSH sessions. Switch to Ctrl+H for network devices that do not accept the default DEL key.",
     "sshConnection": "SSH",

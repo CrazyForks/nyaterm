@@ -351,6 +351,7 @@
     "shellPathPlaceholder": "例如：/bin/zsh 或 pwsh.exe",
     "shellPathRequired": "终端路径不能为空",
     "shellPowerShell": "PowerShell",
+    "shellWindowsTerminal": "Windows Terminal",
     "shellWsl": "WSL",
     "sshBackspaceModeDesc": "控制 SSH 退格键发送的字节。网络等设备不兼容默认 DEL 时，可切换为 Ctrl+H。",
     "sshConnection": "SSH 连接",
