@@ -104,6 +104,14 @@ pub(crate) fn sh_quote(input: &str) -> String {
     format!("'{}'", escaped)
 }
 
+pub(crate) fn remote_dir_listing_path(path: &str) -> String {
+    if path == "/" || path.ends_with('/') {
+        path.to_string()
+    } else {
+        format!("{path}/")
+    }
+}
+
 /// Convert a POSIX permission bitmask to the classic `ls -l` string like `-rwxr-xr-x`.
 pub(crate) fn permissions_to_string(mode: u32, type_char: char) -> String {
     let mut s = String::with_capacity(10);

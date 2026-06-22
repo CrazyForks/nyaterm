@@ -1338,7 +1338,7 @@ impl RemoteFs for SftpBackend {
 
     async fn create_symlink(&self, link_path: &str, target_path: &str) -> AppResult<()> {
         let sftp = self.open_sftp().await?;
-        sftp.symlink(link_path, target_path).await?;
+        sftp.symlink_openssh(target_path, link_path).await?;
         let _ = sftp.close().await;
         Ok(())
     }

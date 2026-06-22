@@ -660,6 +660,27 @@ impl RawSftpSession {
         into_status!(result)
     }
 
+    pub async fn symlink_openssh<T, L>(&self, target: T, link: L) -> SftpResult<Status>
+    where
+        T: Into<String>,
+        L: Into<String>,
+    {
+        let id = self.use_next_id();
+        let result = self
+            .request(
+                Some(id),
+                Symlink {
+                    id,
+                    linkpath: target.into(),
+                    targetpath: link.into(),
+                }
+                .into(),
+            )
+            .await?;
+
+        into_status!(result)
+    }
+
     /// Equivalent to `SSH_FXP_EXTENDED`. Allows protocol expansion.
     /// The extension can return any packet, so it's not specific
     pub async fn extended<R: Into<String>>(&self, request: R, data: Vec<u8>) -> SftpResult<Packet> {

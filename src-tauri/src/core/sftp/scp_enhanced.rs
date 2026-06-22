@@ -634,9 +634,10 @@ impl RemoteFs for ScpEnhancedBackend {
     }
 
     async fn list_dir(&self, path: &str) -> AppResult<Vec<FileEntry>> {
+        let listing_path = remote_dir_listing_path(path);
         let cmd = format!(
             "LC_ALL=C find {} -mindepth 1 -maxdepth 1 -printf '%f\\0%y\\0%s\\0%T@\\0%M\\0%u\\0%g\\0%p\\0'",
-            sh_quote(path)
+            sh_quote(&listing_path)
         );
         let result = self.exec(&cmd).await?;
         if result.exit_code != 0 && result.stdout.is_empty() {
@@ -670,7 +671,7 @@ impl RemoteFs for ScpEnhancedBackend {
             let is_symlink = type_char == "l";
             let is_symlink_to_dir = is_symlink
                 && self
-                    .exec(&format!("test -d -- {}", sh_quote(full_path)))
+                    .exec(&format!("test -d {}", sh_quote(full_path)))
                     .await
                     .map_or(false, |result| result.exit_code == 0);
             let is_dir = type_char == "d" || is_symlink_to_dir;
@@ -723,6 +724,12 @@ impl RemoteFs for ScpEnhancedBackend {
 
         let is_dir = file_type.contains("directory");
         let is_symlink = file_type.contains("symbolic link") || file_type.contains("symlink");
+        let is_symlink_to_dir = is_symlink
+            && self
+                .exec(&format!("test -d {}", sh_quote(path)))
+                .await
+                .map_or(false, |result| result.exit_code == 0);
+        let is_dir = is_dir || is_symlink_to_dir;
         let type_char = if is_dir {
             'd'
         } else if is_symlink {

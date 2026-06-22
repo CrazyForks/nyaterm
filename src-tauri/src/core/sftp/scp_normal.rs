@@ -834,8 +834,9 @@ impl RemoteFs for ScpNormalBackend {
     }
 
     async fn list_dir(&self, path: &str) -> AppResult<Vec<FileEntry>> {
+        let listing_path = remote_dir_listing_path(path);
         let output = self
-            .exec_ok(&format!("LC_ALL=C ls -la -- {}", sh_quote(path)))
+            .exec_ok(&format!("LC_ALL=C ls -la -- {}", sh_quote(&listing_path)))
             .await?;
         let mut entries = Vec::new();
         for line in output.lines() {
@@ -843,7 +844,7 @@ impl RemoteFs for ScpNormalBackend {
                 if entry.is_symlink {
                     let child_path = remote_child_path(path, &entry.name);
                     entry.is_dir = self
-                        .exec(&format!("test -d -- {}", sh_quote(&child_path)))
+                        .exec(&format!("test -d {}", sh_quote(&child_path)))
                         .await
                         .map_or(entry.is_dir, |result| result.exit_code == Some(0));
                 }
@@ -861,7 +862,14 @@ impl RemoteFs for ScpNormalBackend {
             .lines()
             .find(|l| !l.trim().is_empty() && !l.starts_with("total "))
             .ok_or_else(|| AppError::Channel(format!("No stat output for '{}'", path)))?;
-        parse_ls_line_to_properties(line, path)
+        let mut props = parse_ls_line_to_properties(line, path)?;
+        if props.is_symlink {
+            props.is_dir = self
+                .exec(&format!("test -d {}", sh_quote(path)))
+                .await
+                .map_or(props.is_dir, |result| result.exit_code == Some(0));
+        }
+        Ok(props)
     }
 
     async fn mkdir(&self, path: &str, mode: Option<String>) -> AppResult<()> {

@@ -250,6 +250,21 @@ impl SftpSession {
         self.session.symlink(path, target).await.map(|_| ())
     }
 
+    /// Creates a symlink using OpenSSH SFTP argument ordering.
+    ///
+    /// OpenSSH's `SSH_FXP_SYMLINK` implementation expects `(target, link)`,
+    /// which is the reverse of the order documented by the old draft protocol.
+    pub async fn symlink_openssh<T, L>(&self, target: T, link: L) -> SftpResult<()>
+    where
+        T: Into<String>,
+        L: Into<String>,
+    {
+        self.session
+            .symlink_openssh(target, link)
+            .await
+            .map(|_| ())
+    }
+
     /// Queries metadata about the remote file.
     pub async fn metadata<P: Into<String>>(&self, path: P) -> SftpResult<Metadata> {
         Ok(self.session.stat(path).await?.attrs)
