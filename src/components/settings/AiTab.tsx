@@ -65,6 +65,20 @@ function newAction(prefix: string): AICustomActionConfig {
   };
 }
 
+function DeleteIconButton({ onDelete, title }: { onDelete: () => void; title: string }) {
+  return (
+    <Button
+      size="icon-sm"
+      variant="ghost"
+      title={title}
+      className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+      onClick={onDelete}
+    >
+      <MdDelete className="text-[0.95rem]" />
+    </Button>
+  );
+}
+
 export function AiGeneralTab() {
   const { t } = useTranslation();
   const { appSettings, updateAppSettings } = useApp();
@@ -559,14 +573,10 @@ export function AiModelsTab() {
                             onChange={(enabled) => updateModel(model.id, { enabled })}
                           />
                           {model.source === "manual" ? (
-                            <Button
-                              size="icon-xs"
-                              variant="ghost"
+                            <DeleteIconButton
                               title={t("ai.deleteManualModel")}
-                              onClick={() => removeManualModel(model.id)}
-                            >
-                              <MdDelete />
-                            </Button>
+                              onDelete={() => removeManualModel(model.id)}
+                            />
                           ) : null}
                         </div>
                       ))}
@@ -610,13 +620,10 @@ export function AiModelsTab() {
                     onChange={(enabled) => updateCredential(credential.id, { enabled })}
                   />
                   {!builtin ? (
-                    <Button
-                      size="icon-xs"
-                      variant="ghost"
-                      onClick={() => removeCredential(credential.id)}
-                    >
-                      <MdDelete />
-                    </Button>
+                    <DeleteIconButton
+                      title={t("common.delete")}
+                      onDelete={() => removeCredential(credential.id)}
+                    />
                   ) : null}
                 </div>
               </div>
@@ -705,13 +712,10 @@ function ActionListEditor({
                 checked={action.enabled}
                 onChange={(enabled) => updateAction(action.id, { enabled })}
               />
-              <Button
-                size="icon-xs"
-                variant="ghost"
-                onClick={() => onChange(actions.filter((item) => item.id !== action.id))}
-              >
-                <MdDelete />
-              </Button>
+              <DeleteIconButton
+                title={t("common.delete")}
+                onDelete={() => onChange(actions.filter((item) => item.id !== action.id))}
+              />
             </div>
           </div>
           <div className="space-y-3">

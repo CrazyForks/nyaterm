@@ -27,10 +27,10 @@ export default function PanelHeader({
         backgroundColor: "var(--df-bg-section-header)",
       }}
     >
-      <div className="flex min-w-0 items-baseline gap-2">
+      <div className="flex min-w-0 flex-1 items-baseline gap-2">
         <span
           className={cn(
-            "truncate text-[0.6875rem] font-semibold uppercase tracking-[0.16em]",
+            "shrink-0 truncate text-[0.6875rem] font-semibold uppercase tracking-[0.16em]",
             titleClassName,
           )}
           style={{ color: "var(--df-text-muted)" }}
@@ -38,12 +38,15 @@ export default function PanelHeader({
           {title}
         </span>
         {meta != null ? (
-          <span className="shrink-0 text-[0.6875rem]" style={{ color: "var(--df-text-dimmed)" }}>
+          <span
+            className="min-w-0 truncate text-[0.6875rem]"
+            style={{ color: "var(--df-text-dimmed)" }}
+          >
             {meta}
           </span>
         ) : null}
       </div>
-      {actions ? <div className="flex min-w-0 items-center gap-1">{actions}</div> : null}
+      {actions ? <div className="flex shrink-0 items-center gap-1">{actions}</div> : null}
     </div>
   );
 }
