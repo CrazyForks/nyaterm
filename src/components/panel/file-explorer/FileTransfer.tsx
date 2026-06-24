@@ -51,6 +51,16 @@ function formatSize(bytes: number): string {
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 }
 
+function formatRate(bytesPerSecond: number): string {
+  if (bytesPerSecond <= 0) return "0 B/s";
+  if (bytesPerSecond < 1024) return `${Math.round(bytesPerSecond)} B/s`;
+  if (bytesPerSecond < 1024 * 1024) return `${(bytesPerSecond / 1024).toFixed(1)} KB/s`;
+  if (bytesPerSecond < 1024 * 1024 * 1024) {
+    return `${(bytesPerSecond / (1024 * 1024)).toFixed(1)} MB/s`;
+  }
+  return `${(bytesPerSecond / (1024 * 1024 * 1024)).toFixed(1)} GB/s`;
+}
+
 function formatTime(ts: number): string {
   const d = new Date(ts);
   return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
@@ -145,7 +155,7 @@ function TransferRow({
   const canDelete = !canCancel || item.status === "queued" || item.queueState === "pending";
 
   let statusColor = "#facc15";
-  let statusText = `${progress}%`;
+  let statusText = formatRate(item.speedBytesPerSec ?? 0);
 
   if (item.status === "queued") {
     statusColor = "#a1a1aa";
@@ -194,15 +204,15 @@ function TransferRow({
                 {item.fileName}
               </div>
               <div
-                className="flex items-center gap-1 text-[0.625rem]"
+                className="flex min-w-0 items-center gap-1 overflow-hidden whitespace-nowrap text-[0.625rem]"
                 style={{ color: "var(--df-text-dimmed)" }}
               >
-                <span>{formatTime(item.timestamp)}</span>
+                <span className="shrink-0">{formatTime(item.timestamp)}</span>
                 {item.kind === "directory" ? (
                   item.itemCountTotal !== undefined && (
                     <>
-                      <span>·</span>
-                      <span>
+                      <span className="shrink-0">·</span>
+                      <span className="truncate">
                         {t("fileTransfer.directoryProgress", {
                           completed: item.itemCountCompleted ?? 0,
                           total: item.itemCountTotal,
@@ -212,20 +222,20 @@ function TransferRow({
                   )
                 ) : item.totalSize > 0 ? (
                   <>
-                    <span>·</span>
-                    <span>
+                    <span className="shrink-0">·</span>
+                    <span className="truncate">
                       {formatSize(item.bytesTransferred)} / {formatSize(item.totalSize)}
                     </span>
                   </>
                 ) : item.status === "completed" && item.size > 0 && item.totalSize === 0 ? (
                   <>
-                    <span>·</span>
-                    <span>{formatSize(item.size)}</span>
+                    <span className="shrink-0">·</span>
+                    <span className="truncate">{formatSize(item.size)}</span>
                   </>
                 ) : null}
                 {item.error && (
                   <>
-                    <span>·</span>
+                    <span className="shrink-0">·</span>
                     <span className="truncate" style={{ color: "#f87171" }}>
                       {item.error}
                     </span>
@@ -236,7 +246,7 @@ function TransferRow({
 
             {item.status === "transferring" ? (
               <span
-                className="text-[0.625rem] font-mono font-bold shrink-0"
+                className="w-[4.25rem] shrink-0 text-right font-mono text-[0.625rem] font-bold tabular-nums"
                 style={{ color: statusColor }}
               >
                 {statusText}

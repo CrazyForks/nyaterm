@@ -64,6 +64,7 @@ export interface TransferItem {
   status: TransferStatus;
   size: number;
   bytesTransferred: number;
+  speedBytesPerSec?: number;
   totalSize: number;
   itemCountTotal?: number;
   itemCountCompleted?: number;
@@ -123,6 +124,50 @@ function getBackgroundTransferConcurrency(value: number) {
   return configured > 1 ? configured - 1 : 1;
 }
 
+const TRANSFER_SPEED_WINDOW_MS = 3000;
+
+interface TransferSpeedSample {
+  bytesTransferred: number;
+  timestamp: number;
+}
+
+function calculateTransferSpeed(
+  samples: TransferSpeedSample[] | undefined,
+  bytesTransferred: number,
+  timestamp: number,
+): { samples: TransferSpeedSample[]; speedBytesPerSec?: number } {
+  const previousSamples = samples ?? [];
+  const previousSample =
+    previousSamples.length > 0 ? previousSamples[previousSamples.length - 1] : undefined;
+  const currentSample = { bytesTransferred, timestamp };
+
+  if (previousSample && bytesTransferred < previousSample.bytesTransferred) {
+    return { samples: [currentSample], speedBytesPerSec: 0 };
+  }
+
+  if (previousSample && bytesTransferred === previousSample.bytesTransferred) {
+    const isStale = timestamp - previousSample.timestamp > TRANSFER_SPEED_WINDOW_MS;
+    return {
+      samples: previousSamples,
+      speedBytesPerSec: isStale ? 0 : undefined,
+    };
+  }
+
+  const windowStart = timestamp - TRANSFER_SPEED_WINDOW_MS;
+  const windowSamples = [...previousSamples, currentSample].filter(
+    (sample) => sample.timestamp >= windowStart,
+  );
+  const firstSample = windowSamples[0];
+  const elapsedMs = firstSample ? timestamp - firstSample.timestamp : 0;
+  const byteDelta = firstSample ? bytesTransferred - firstSample.bytesTransferred : 0;
+
+  return {
+    samples: windowSamples,
+    speedBytesPerSec:
+      elapsedMs > 0 && byteDelta >= 0 ? Math.round((byteDelta * 1000) / elapsedMs) : 0,
+  };
+}
+
 export function TransferProvider({ children }: { children: ReactNode }) {
   const { t } = useTranslation();
   const { appSettings } = useApp();
@@ -131,6 +176,7 @@ export function TransferProvider({ children }: { children: ReactNode }) {
   const queuedTransfersRef = useRef<Map<string, QueuedTransferRequest>>(new Map());
   const parkedTransferIdsRef = useRef<Set<string>>(new Set());
   const uploadFolderToastIdsRef = useRef<Map<string, string | number>>(new Map());
+  const transferSpeedSamplesRef = useRef<Map<string, TransferSpeedSample[]>>(new Map());
   const [queueRevision, setQueueRevision] = useState(0);
 
   const transfers = useMemo(() => Array.from(transferMap.values()), [transferMap]);
@@ -143,11 +189,18 @@ export function TransferProvider({ children }: { children: ReactNode }) {
     const unlisten = listen<TransferEventPayload>("transfer-event", (e) => {
       const p = e.payload;
       const kind = (p.kind ?? "file") as TransferKind;
+      const now = Date.now();
 
       if (p.status === "started") {
         if (p.parent_id) {
           return;
         }
+        transferSpeedSamplesRef.current.set(p.id, [
+          {
+            bytesTransferred: p.bytes_transferred,
+            timestamp: now,
+          },
+        ]);
         setTransferMap((prev) => {
           const next = new Map(prev);
           const existing = next.get(p.id);
@@ -164,10 +217,11 @@ export function TransferProvider({ children }: { children: ReactNode }) {
             status: "transferring",
             size: 0,
             bytesTransferred: 0,
+            speedBytesPerSec: 0,
             totalSize: p.total_size,
             itemCountTotal: p.item_count_total,
             itemCountCompleted: p.item_count_completed,
-            timestamp: existing?.timestamp ?? Date.now(),
+            timestamp: existing?.timestamp ?? now,
             queueState:
               existing?.queueState ??
               (queuedTransfersRef.current.has(p.id) ? "running" : undefined),
@@ -184,37 +238,55 @@ export function TransferProvider({ children }: { children: ReactNode }) {
         let updated: TransferItem;
 
         if (p.status === "progress") {
+          const speed = calculateTransferSpeed(
+            transferSpeedSamplesRef.current.get(p.id),
+            p.bytes_transferred,
+            now,
+          );
+          transferSpeedSamplesRef.current.set(p.id, speed.samples);
           updated = {
             ...existing,
             status: "transferring",
             bytesTransferred: p.bytes_transferred,
+            speedBytesPerSec: speed.speedBytesPerSec ?? existing.speedBytesPerSec ?? 0,
             totalSize: p.total_size,
             itemCountTotal: p.item_count_total ?? existing.itemCountTotal,
             itemCountCompleted: p.item_count_completed ?? existing.itemCountCompleted,
           };
         } else if (p.status === "paused") {
+          transferSpeedSamplesRef.current.delete(p.id);
           updated = {
             ...existing,
             status: "paused",
             bytesTransferred: p.bytes_transferred,
+            speedBytesPerSec: undefined,
             totalSize: p.total_size,
             itemCountTotal: p.item_count_total ?? existing.itemCountTotal,
             itemCountCompleted: p.item_count_completed ?? existing.itemCountCompleted,
           };
         } else if (p.status === "resumed") {
+          transferSpeedSamplesRef.current.set(p.id, [
+            {
+              bytesTransferred: p.bytes_transferred,
+              timestamp: now,
+            },
+          ]);
           updated = {
             ...existing,
             status: "transferring",
             bytesTransferred: p.bytes_transferred,
+            speedBytesPerSec: 0,
             totalSize: p.total_size,
             itemCountTotal: p.item_count_total ?? existing.itemCountTotal,
             itemCountCompleted: p.item_count_completed ?? existing.itemCountCompleted,
           };
         } else if (p.status === "cancelled") {
+          transferSpeedSamplesRef.current.delete(p.id);
           updated = {
             ...existing,
             status: "cancelled",
             bytesTransferred: p.bytes_transferred,
+            speedBytesPerSec: undefined,
             totalSize: p.total_size,
             itemCountTotal: p.item_count_total ?? existing.itemCountTotal,
             itemCountCompleted: p.item_count_completed ?? existing.itemCountCompleted,
@@ -222,11 +294,15 @@ export function TransferProvider({ children }: { children: ReactNode }) {
             error: undefined,
           };
         } else {
+          if (p.status === "completed" || p.status === "error") {
+            transferSpeedSamplesRef.current.delete(p.id);
+          }
           updated = {
             ...existing,
             status: p.status as TransferStatus,
             size: p.size,
             bytesTransferred: p.bytes_transferred,
+            speedBytesPerSec: undefined,
             totalSize: p.total_size,
             itemCountTotal: p.item_count_total ?? existing.itemCountTotal,
             itemCountCompleted: p.item_count_completed ?? existing.itemCountCompleted,
@@ -478,7 +554,10 @@ export function TransferProvider({ children }: { children: ReactNode }) {
     setTransferMap((prev) => {
       const next = new Map(prev);
       for (const [id, t] of prev) {
-        if (t.status === "completed") next.delete(id);
+        if (t.status === "completed") {
+          transferSpeedSamplesRef.current.delete(id);
+          next.delete(id);
+        }
       }
       return next.size === prev.size ? prev : next;
     });
@@ -487,6 +566,7 @@ export function TransferProvider({ children }: { children: ReactNode }) {
   const clearAll = useCallback(() => {
     queuedTransfersRef.current.clear();
     parkedTransferIdsRef.current.clear();
+    transferSpeedSamplesRef.current.clear();
     setTransferMap(new Map());
   }, []);
 
@@ -497,6 +577,7 @@ export function TransferProvider({ children }: { children: ReactNode }) {
         toast.error(String(error));
       });
     }
+    transferSpeedSamplesRef.current.delete(id);
     queuedTransfersRef.current.delete(id);
     setTransferMap((prev) => {
       if (!prev.has(id)) return prev;
@@ -513,7 +594,8 @@ export function TransferProvider({ children }: { children: ReactNode }) {
         const queued = prev.get(id);
         if (!queued || queued.status !== "queued") return prev;
         const next = new Map(prev);
-        next.set(id, { ...queued, status: "paused" });
+        transferSpeedSamplesRef.current.delete(id);
+        next.set(id, { ...queued, status: "paused", speedBytesPerSec: undefined });
         return next;
       });
       return;
@@ -524,7 +606,13 @@ export function TransferProvider({ children }: { children: ReactNode }) {
         const queued = prev.get(id);
         if (!queued || queued.status !== "queued") return prev;
         const next = new Map(prev);
-        next.set(id, { ...queued, status: "paused", queueState: "running" });
+        transferSpeedSamplesRef.current.delete(id);
+        next.set(id, {
+          ...queued,
+          status: "paused",
+          speedBytesPerSec: undefined,
+          queueState: "running",
+        });
         return next;
       });
       setQueueRevision((revision) => revision + 1);
@@ -545,7 +633,8 @@ export function TransferProvider({ children }: { children: ReactNode }) {
         const queued = prev.get(id);
         if (!queued || queued.status !== "paused") return prev;
         const next = new Map(prev);
-        next.set(id, { ...queued, status: "queued" });
+        transferSpeedSamplesRef.current.delete(id);
+        next.set(id, { ...queued, status: "queued", speedBytesPerSec: undefined });
         return next;
       });
       setQueueRevision((revision) => revision + 1);
@@ -558,7 +647,13 @@ export function TransferProvider({ children }: { children: ReactNode }) {
         const paused = prev.get(id);
         if (!paused || paused.status !== "paused") return prev;
         const next = new Map(prev);
-        next.set(id, { ...paused, status: "queued", queueState: "pending" });
+        transferSpeedSamplesRef.current.delete(id);
+        next.set(id, {
+          ...paused,
+          status: "queued",
+          speedBytesPerSec: undefined,
+          queueState: "pending",
+        });
         return next;
       });
       setQueueRevision((revision) => revision + 1);
@@ -576,6 +671,7 @@ export function TransferProvider({ children }: { children: ReactNode }) {
     const existing = transferMapRef.current.get(id);
     if (queuedTransfersRef.current.has(id)) {
       queuedTransfersRef.current.delete(id);
+      transferSpeedSamplesRef.current.delete(id);
       setTransferMap((prev) => {
         const queued = prev.get(id);
         if (!queued || queued.status === "completed" || queued.status === "error") return prev;
@@ -583,6 +679,7 @@ export function TransferProvider({ children }: { children: ReactNode }) {
         next.set(id, {
           ...queued,
           status: "cancelled",
+          speedBytesPerSec: undefined,
           queueState: undefined,
           error: undefined,
         });
@@ -594,6 +691,7 @@ export function TransferProvider({ children }: { children: ReactNode }) {
 
     if (parkedTransferIdsRef.current.has(id)) {
       parkedTransferIdsRef.current.delete(id);
+      transferSpeedSamplesRef.current.delete(id);
       try {
         await invoke("cancel_transfer", { transferId: id });
       } catch (error) {
@@ -606,6 +704,7 @@ export function TransferProvider({ children }: { children: ReactNode }) {
         next.set(id, {
           ...parked,
           status: "cancelled",
+          speedBytesPerSec: undefined,
           queueState: undefined,
           error: undefined,
         });
@@ -619,6 +718,7 @@ export function TransferProvider({ children }: { children: ReactNode }) {
 
     try {
       await invoke("cancel_transfer", { transferId: id });
+      transferSpeedSamplesRef.current.delete(id);
       setTransferMap((prev) => {
         const existing = prev.get(id);
         if (!existing || existing.status === "completed" || existing.status === "error") {
@@ -628,6 +728,7 @@ export function TransferProvider({ children }: { children: ReactNode }) {
         next.set(id, {
           ...existing,
           status: "cancelled",
+          speedBytesPerSec: undefined,
           queueState: undefined,
           error: undefined,
         });
@@ -641,6 +742,7 @@ export function TransferProvider({ children }: { children: ReactNode }) {
 
   const retryTransfer = useCallback(async (item: TransferItem) => {
     parkedTransferIdsRef.current.delete(item.id);
+    transferSpeedSamplesRef.current.delete(item.id);
     queuedTransfersRef.current.set(item.id, {
       sessionId: item.sessionId,
       fileName: item.fileName,
@@ -655,6 +757,7 @@ export function TransferProvider({ children }: { children: ReactNode }) {
         ...item,
         status: "queued",
         bytesTransferred: 0,
+        speedBytesPerSec: undefined,
         totalSize: 0,
         itemCountCompleted: undefined,
         itemCountTotal: undefined,
@@ -693,6 +796,7 @@ export function TransferProvider({ children }: { children: ReactNode }) {
           status: "queued",
           size: 0,
           bytesTransferred: 0,
+          speedBytesPerSec: undefined,
           totalSize: 0,
           timestamp: Date.now() + index,
           queueState: "pending",
