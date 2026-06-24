@@ -29,6 +29,7 @@ const GITHUB_GIST_REMOTE_TIMEOUT: Duration = Duration::from_secs(30);
 const GITHUB_GIST_CONFLICT_RETRY_DELAY: Duration = Duration::from_millis(750);
 const GITHUB_API_VERSION: &str = "2022-11-28";
 
+#[derive(Clone)]
 pub(super) enum CloudRemote {
     OpenDal(Operator),
     GiteeSnippet(GiteeSnippetRemote),
@@ -413,6 +414,7 @@ fn map_webdav_auth_error(raw: &str) -> Option<String> {
     None
 }
 
+#[derive(Clone)]
 pub(super) struct GiteeSnippetRemote {
     client: reqwest::Client,
     api_endpoint: String,
@@ -660,6 +662,7 @@ fn map_gitee_client_error(error: reqwest::Error) -> AppError {
     }
 }
 
+#[derive(Clone)]
 pub(super) struct GithubGistRemote {
     client: reqwest::Client,
     gist_id: String,

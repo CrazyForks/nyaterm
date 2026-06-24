@@ -30,6 +30,7 @@ use crate::core::portable_snapshot::{
 const CLOUD_SYNC_STARTUP_CHECK_TIMEOUT: Duration = Duration::from_secs(30);
 const CLOUD_SYNC_OPERATION_TIMEOUT: Duration = Duration::from_secs(300);
 const CLOUD_SYNC_QUICK_OPERATION_TIMEOUT: Duration = Duration::from_secs(60);
+const CLOUD_SYNC_CLEANUP_TIMEOUT: Duration = Duration::from_secs(20);
 const AUTOMATIC_RETRY_BACKOFF_MS: [u64; 4] = [60_000, 300_000, 900_000, 3_600_000];
 
 pub struct CloudSyncManager {
@@ -164,11 +165,41 @@ impl CloudSyncManager {
             CLOUD_SYNC_QUICK_OPERATION_TIMEOUT,
             async {
                 let _ = require_master_password()?;
-                let remote = self.build_remote_with_recovery(settings.clone()).await?;
-                ensure_remote_layout(&remote, &settings.remote_root).await?;
-                let _ = remote
-                    .exists(&remote_path(&settings.remote_root, SYNC_SNAPSHOTS_DIR))
-                    .await?;
+                self.set_status(
+                    "running",
+                    "Connecting to cloud sync storage".to_string(),
+                    Some("test_connection".to_string()),
+                    None,
+                )
+                .await;
+                let remote = trace_cloud_sync_step("test_connection", "build_remote", async {
+                    self.build_remote_with_recovery(settings.clone()).await
+                })
+                .await?;
+                self.set_status(
+                    "running",
+                    "Verifying cloud sync storage layout".to_string(),
+                    Some("test_connection".to_string()),
+                    None,
+                )
+                .await;
+                trace_cloud_sync_step("test_connection", "ensure_remote_layout", async {
+                    ensure_remote_layout(&remote, &settings.remote_root).await
+                })
+                .await?;
+                self.set_status(
+                    "running",
+                    "Checking cloud sync storage access".to_string(),
+                    Some("test_connection".to_string()),
+                    None,
+                )
+                .await;
+                let _ = trace_cloud_sync_step("test_connection", "exists_snapshots_dir", async {
+                    remote
+                        .exists(&remote_path(&settings.remote_root, SYNC_SNAPSHOTS_DIR))
+                        .await
+                })
+                .await?;
                 Ok::<(), AppError>(())
             },
         )
@@ -281,15 +312,45 @@ impl CloudSyncManager {
             return Ok(());
         }
         let _ = require_master_password()?;
-        let remote = self.build_remote_with_recovery(settings.clone()).await?;
-        ensure_remote_layout(&remote, &settings.remote_root).await?;
+        self.set_status(
+            "running",
+            "Connecting to cloud sync storage".to_string(),
+            Some("startup_check".to_string()),
+            None,
+        )
+        .await;
+        let remote = trace_cloud_sync_step("startup_check", "build_remote", async {
+            self.build_remote_with_recovery(settings.clone()).await
+        })
+        .await?;
+        self.set_status(
+            "running",
+            "Verifying cloud sync storage layout".to_string(),
+            Some("startup_check".to_string()),
+            None,
+        )
+        .await;
+        trace_cloud_sync_step("startup_check", "ensure_remote_layout", async {
+            ensure_remote_layout(&remote, &settings.remote_root).await
+        })
+        .await?;
 
         let local_envelope = {
             let state = self.state.lock().await.clone();
             build_portable_snapshot(&self.app()?, PortableSnapshotKind::Sync, &state.device_id)?
         };
         let local_hash = local_envelope.payload_hash.clone();
-        let latest = load_sync_pointer(&remote, &settings.remote_root).await?;
+        self.set_status(
+            "running",
+            "Reading latest cloud sync pointer".to_string(),
+            Some("startup_check".to_string()),
+            None,
+        )
+        .await;
+        let latest = trace_cloud_sync_step("startup_check", "load_sync_pointer", async {
+            load_sync_pointer(&remote, &settings.remote_root).await
+        })
+        .await?;
 
         {
             let mut state = self.state.lock().await;
@@ -319,11 +380,13 @@ impl CloudSyncManager {
             .map_or(true, |revision| revision != remote.revision_id);
 
         if remote.payload_hash == local_hash {
-            let mut state = self.state.lock().await;
-            state.last_synced_payload_hash = Some(local_hash);
-            state.last_applied_remote_revision = Some(remote.revision_id.clone());
-            state.last_checked_at_ms = Some(current_time_ms());
-            config::save_cloud_sync_state(&self.app()?, &state)?;
+            {
+                let mut state = self.state.lock().await;
+                state.last_synced_payload_hash = Some(local_hash);
+                state.last_applied_remote_revision = Some(remote.revision_id.clone());
+                state.last_checked_at_ms = Some(current_time_ms());
+                config::save_cloud_sync_state(&self.app()?, &state)?;
+            }
             self.set_status("idle", "Cloud sync is up to date".to_string(), None, None)
                 .await;
             return Ok(());
@@ -461,24 +524,63 @@ impl CloudSyncManager {
 
         let started = Instant::now();
         let state_snapshot = self.state.lock().await.clone();
-        let remote = self.build_remote_with_recovery(settings.clone()).await?;
-        ensure_remote_layout(&remote, &settings.remote_root).await?;
+        self.set_status(
+            "running",
+            "Connecting to cloud sync storage".to_string(),
+            Some("sync_push".to_string()),
+            None,
+        )
+        .await;
+        let remote = trace_cloud_sync_step(trigger, "build_remote", async {
+            self.build_remote_with_recovery(settings.clone()).await
+        })
+        .await?;
+        self.set_status(
+            "running",
+            "Verifying cloud sync storage layout".to_string(),
+            Some("sync_push".to_string()),
+            None,
+        )
+        .await;
+        trace_cloud_sync_step(trigger, "ensure_remote_layout", async {
+            ensure_remote_layout(&remote, &settings.remote_root).await
+        })
+        .await?;
 
+        self.set_status(
+            "running",
+            "Preparing local cloud sync snapshot".to_string(),
+            Some("sync_push".to_string()),
+            None,
+        )
+        .await;
         let envelope = build_portable_snapshot(
             &self.app()?,
             PortableSnapshotKind::Sync,
             &state_snapshot.device_id,
         )?;
         let local_hash = envelope.payload_hash.clone();
-        let latest = load_sync_pointer(&remote, &settings.remote_root).await?;
+        self.set_status(
+            "running",
+            "Reading latest cloud sync pointer".to_string(),
+            Some("sync_push".to_string()),
+            None,
+        )
+        .await;
+        let latest = trace_cloud_sync_step(trigger, "load_sync_pointer", async {
+            load_sync_pointer(&remote, &settings.remote_root).await
+        })
+        .await?;
 
         if let Some(remote) = &latest {
             if remote.payload_hash == local_hash {
-                let mut state = self.state.lock().await;
-                state.last_synced_payload_hash = Some(local_hash);
-                state.last_applied_remote_revision = Some(remote.revision_id.clone());
-                state.last_checked_at_ms = Some(current_time_ms());
-                config::save_cloud_sync_state(&self.app()?, &state)?;
+                {
+                    let mut state = self.state.lock().await;
+                    state.last_synced_payload_hash = Some(local_hash);
+                    state.last_applied_remote_revision = Some(remote.revision_id.clone());
+                    state.last_checked_at_ms = Some(current_time_ms());
+                    config::save_cloud_sync_state(&self.app()?, &state)?;
+                }
                 self.set_status(
                     "idle",
                     "Cloud sync is already up to date".to_string(),
@@ -535,7 +637,17 @@ impl CloudSyncManager {
             ));
         }
 
-        write_current_sync_snapshot(&remote, &settings.remote_root, &envelope).await?;
+        self.set_status(
+            "running",
+            "Uploading cloud sync snapshot".to_string(),
+            Some("sync_push".to_string()),
+            None,
+        )
+        .await;
+        trace_cloud_sync_step(trigger, "write_current_sync_snapshot", async {
+            write_current_sync_snapshot(&remote, &settings.remote_root, &envelope).await
+        })
+        .await?;
 
         let pointer = RemoteSyncPointer {
             revision_id: envelope.revision_id.clone(),
@@ -544,8 +656,18 @@ impl CloudSyncManager {
             device_id: envelope.device_id.clone(),
             app_version: envelope.app_version.clone(),
         };
-        write_sync_pointer(&remote, &settings.remote_root, &pointer).await?;
-        cleanup_legacy_sync_snapshots(&remote, &settings.remote_root).await;
+        self.set_status(
+            "running",
+            "Updating cloud sync pointer".to_string(),
+            Some("sync_push".to_string()),
+            None,
+        )
+        .await;
+        trace_cloud_sync_step(trigger, "write_sync_pointer", async {
+            write_sync_pointer(&remote, &settings.remote_root, &pointer).await
+        })
+        .await?;
+        schedule_cleanup_legacy_sync_snapshots(remote.clone(), settings.remote_root.clone());
 
         {
             let mut state = self.state.lock().await;
@@ -597,12 +719,38 @@ impl CloudSyncManager {
         .await;
 
         let started = Instant::now();
-        let remote = self.build_remote_with_recovery(settings.clone()).await?;
-        let latest = load_sync_pointer(&remote, &settings.remote_root)
-            .await?
-            .ok_or_else(|| AppError::Config("No remote sync snapshot found".to_string()))?;
+        self.set_status(
+            "running",
+            "Connecting to cloud sync storage".to_string(),
+            Some("sync_pull".to_string()),
+            None,
+        )
+        .await;
+        let remote = trace_cloud_sync_step(trigger, "build_remote", async {
+            self.build_remote_with_recovery(settings.clone()).await
+        })
+        .await?;
+        self.set_status(
+            "running",
+            "Reading latest cloud sync pointer".to_string(),
+            Some("sync_pull".to_string()),
+            None,
+        )
+        .await;
+        let latest = trace_cloud_sync_step(trigger, "load_sync_pointer", async {
+            load_sync_pointer(&remote, &settings.remote_root).await
+        })
+        .await?
+        .ok_or_else(|| AppError::Config("No remote sync snapshot found".to_string()))?;
 
         let state_snapshot = self.state.lock().await.clone();
+        self.set_status(
+            "running",
+            "Preparing local cloud sync snapshot".to_string(),
+            Some("sync_pull".to_string()),
+            None,
+        )
+        .await;
         let local_envelope = build_portable_snapshot(
             &self.app()?,
             PortableSnapshotKind::Sync,
@@ -618,11 +766,13 @@ impl CloudSyncManager {
             .map_or(true, |revision| revision != latest.revision_id);
 
         if latest.payload_hash == local_envelope.payload_hash {
-            let mut state = self.state.lock().await;
-            state.last_synced_payload_hash = Some(latest.payload_hash.clone());
-            state.last_applied_remote_revision = Some(latest.revision_id.clone());
-            state.last_checked_at_ms = Some(current_time_ms());
-            config::save_cloud_sync_state(&self.app()?, &state)?;
+            {
+                let mut state = self.state.lock().await;
+                state.last_synced_payload_hash = Some(latest.payload_hash.clone());
+                state.last_applied_remote_revision = Some(latest.revision_id.clone());
+                state.last_checked_at_ms = Some(current_time_ms());
+                config::save_cloud_sync_state(&self.app()?, &state)?;
+            }
             self.set_status(
                 "idle",
                 "Cloud sync is already up to date".to_string(),
@@ -667,10 +817,40 @@ impl CloudSyncManager {
             ));
         }
 
-        let envelope = read_sync_snapshot(&remote, &settings.remote_root, &latest).await?;
-        apply_portable_snapshot(&self.app()?, &envelope).await?;
-        write_current_sync_snapshot(&remote, &settings.remote_root, &envelope).await?;
-        cleanup_legacy_sync_snapshots(&remote, &settings.remote_root).await;
+        self.set_status(
+            "running",
+            "Downloading cloud sync snapshot".to_string(),
+            Some("sync_pull".to_string()),
+            None,
+        )
+        .await;
+        let envelope = trace_cloud_sync_step(trigger, "read_sync_snapshot", async {
+            read_sync_snapshot(&remote, &settings.remote_root, &latest).await
+        })
+        .await?;
+        self.set_status(
+            "running",
+            "Applying cloud sync snapshot".to_string(),
+            Some("sync_pull".to_string()),
+            None,
+        )
+        .await;
+        trace_cloud_sync_step(trigger, "apply_portable_snapshot", async {
+            apply_portable_snapshot(&self.app()?, &envelope).await
+        })
+        .await?;
+        self.set_status(
+            "running",
+            "Refreshing cloud sync current snapshot".to_string(),
+            Some("sync_pull".to_string()),
+            None,
+        )
+        .await;
+        trace_cloud_sync_step(trigger, "write_current_sync_snapshot", async {
+            write_current_sync_snapshot(&remote, &settings.remote_root, &envelope).await
+        })
+        .await?;
+        schedule_cleanup_legacy_sync_snapshots(remote.clone(), settings.remote_root.clone());
 
         {
             let mut state = self.state.lock().await;
@@ -929,6 +1109,32 @@ where
         })?
 }
 
+async fn trace_cloud_sync_step<T, F>(operation: &str, step: &str, future: F) -> AppResult<T>
+where
+    F: Future<Output = AppResult<T>>,
+{
+    tracing::info!(operation, step, "Cloud sync operation step started");
+    let started = Instant::now();
+    let result = future.await;
+    let duration_ms = elapsed_ms(started.elapsed());
+    match &result {
+        Ok(_) => tracing::info!(
+            operation,
+            step,
+            duration_ms,
+            "Cloud sync operation step completed"
+        ),
+        Err(error) => tracing::warn!(
+            operation,
+            step,
+            duration_ms,
+            error = %error,
+            "Cloud sync operation step failed"
+        ),
+    }
+    result
+}
+
 async fn write_current_sync_snapshot(
     remote: &super::operator::CloudRemote,
     remote_root: &str,
@@ -975,9 +1181,39 @@ fn decode_remote_sync_snapshot(raw: &[u8]) -> AppResult<PortableSnapshot> {
     decode_portable_snapshot(&decrypted)
 }
 
+fn schedule_cleanup_legacy_sync_snapshots(
+    remote: super::operator::CloudRemote,
+    remote_root: String,
+) {
+    async_runtime::spawn(async move {
+        let result = with_operation_timeout(
+            "cleanup_legacy_sync_snapshots",
+            CLOUD_SYNC_CLEANUP_TIMEOUT,
+            async {
+                cleanup_legacy_sync_snapshots(&remote, &remote_root).await;
+                Ok(())
+            },
+        )
+        .await;
+
+        if let Err(error) = result {
+            tracing::warn!(
+                error = %error,
+                "Legacy cloud sync snapshot cleanup did not complete"
+            );
+        }
+    });
+}
+
 async fn cleanup_legacy_sync_snapshots(remote: &super::operator::CloudRemote, remote_root: &str) {
     let prefix = remote_path(remote_root, SYNC_SNAPSHOTS_DIR);
-    let paths = match remote.list_files(&prefix).await {
+    let paths = match trace_cloud_sync_step(
+        "cleanup_legacy_sync_snapshots",
+        "list_legacy_snapshots",
+        remote.list_files(&prefix),
+    )
+    .await
+    {
         Ok(paths) => paths,
         Err(error) => {
             tracing::warn!("Failed to list legacy cloud sync snapshots: {}", error);
@@ -989,7 +1225,13 @@ async fn cleanup_legacy_sync_snapshots(remote: &super::operator::CloudRemote, re
         .into_iter()
         .filter(|path| is_legacy_sync_snapshot_path(path, remote_root))
     {
-        if let Err(error) = remote.delete(&path).await {
+        if let Err(error) = trace_cloud_sync_step(
+            "cleanup_legacy_sync_snapshots",
+            "delete_legacy_snapshot",
+            remote.delete(&path),
+        )
+        .await
+        {
             tracing::warn!(
                 path = %path,
                 error = %error,
@@ -1097,6 +1339,32 @@ mod tests {
         let status = manager.status.lock().await.clone();
         assert_eq!(status.state, "failed");
         assert!(status.current_operation.is_none());
+    }
+
+    #[tokio::test]
+    async fn status_update_after_state_save_does_not_deadlock() {
+        let manager = CloudSyncManager::new();
+
+        {
+            let mut state = manager.state.lock().await;
+            state.last_checked_at_ms = Some(current_time_ms());
+        }
+
+        tokio::time::timeout(
+            Duration::from_millis(100),
+            manager.set_status(
+                "idle",
+                "Cloud sync is already up to date".to_string(),
+                None,
+                None,
+            ),
+        )
+        .await
+        .expect("set_status should not wait on a retained state lock");
+
+        let status = manager.status.lock().await.clone();
+        assert_eq!(status.state, "idle");
+        assert_eq!(status.message, "Cloud sync is already up to date");
     }
 
     #[tokio::test]
