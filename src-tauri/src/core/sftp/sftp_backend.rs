@@ -69,6 +69,80 @@ struct SftpDirectoryConcurrency {
     large_file_concurrency: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DownloadReadProgress {
+    Continue(u64),
+    Complete,
+}
+
+fn unexpected_download_eof_error(
+    remote_path: &str,
+    local_path: &str,
+    remote_size: u64,
+    bytes_written: u64,
+    request_kib: usize,
+    payload_bytes: usize,
+) -> AppError {
+    AppError::Channel(format!(
+        "Unexpected EOF while downloading {remote_path}: expected {remote_size} bytes, got {bytes_written} bytes (local_path={local_path}, request_kib={request_kib}, payload_bytes={payload_bytes})"
+    ))
+}
+
+fn classify_download_read_progress(
+    remote_path: &str,
+    local_path: &str,
+    remote_size: u64,
+    offset: u64,
+    bytes_written: u64,
+    bytes_read: usize,
+    request_kib: usize,
+    payload_bytes: usize,
+) -> AppResult<DownloadReadProgress> {
+    if offset >= remote_size {
+        return Ok(DownloadReadProgress::Complete);
+    }
+
+    if bytes_read == 0 {
+        return Err(unexpected_download_eof_error(
+            remote_path,
+            local_path,
+            remote_size,
+            bytes_written,
+            request_kib,
+            payload_bytes,
+        ));
+    }
+
+    let next_offset = offset.saturating_add(bytes_read as u64);
+    if next_offset >= remote_size {
+        Ok(DownloadReadProgress::Complete)
+    } else {
+        Ok(DownloadReadProgress::Continue(next_offset))
+    }
+}
+
+fn ensure_download_complete(
+    remote_path: &str,
+    local_path: &str,
+    remote_size: u64,
+    bytes_written: u64,
+    request_kib: usize,
+    payload_bytes: usize,
+) -> AppResult<()> {
+    if bytes_written == remote_size {
+        Ok(())
+    } else {
+        Err(unexpected_download_eof_error(
+            remote_path,
+            local_path,
+            remote_size,
+            bytes_written,
+            request_kib,
+            payload_bytes,
+        ))
+    }
+}
+
 fn sftp_directory_concurrency(max_open_handles: Option<u64>) -> SftpDirectoryConcurrency {
     let handle_budget = max_open_handles
         .map(|handles| handles.saturating_sub(SFTP_HANDLE_RESERVE as u64) as usize)
@@ -772,12 +846,46 @@ async fn read_sftp_chunk(
     remote_file: russh_sftp::client::fs::File,
     offset: u64,
     len: usize,
-) -> AppResult<(u64, Vec<u8>, russh_sftp::client::fs::File)> {
-    let data = remote_file
-        .read_at(offset, len)
-        .await
-        .map_err(|e| AppError::Channel(format!("SFTP read failed: {}", e)))?;
-    Ok((offset, data, remote_file))
+    remote_path: String,
+    remote_size: u64,
+    payload_bytes: usize,
+) -> AppResult<(u64, Vec<u8>, bool, russh_sftp::client::fs::File)> {
+    let mut data = Vec::with_capacity(len);
+    let mut read_offset = offset;
+    let end_offset = offset.saturating_add(len as u64).min(remote_size);
+    let mut completed_range = true;
+
+    while read_offset < end_offset {
+        let remaining = (end_offset - read_offset) as usize;
+        let chunk = remote_file
+            .read_at(read_offset, remaining.min(payload_bytes))
+            .await
+            .map_err(|e| {
+                AppError::Channel(format!(
+                    "SFTP read failed for {remote_path} at offset {read_offset}: {e}"
+                ))
+            })?;
+        if chunk.is_empty() {
+            completed_range = false;
+            break;
+        }
+        read_offset = match classify_download_read_progress(
+            &remote_path,
+            "",
+            end_offset,
+            read_offset,
+            data.len() as u64,
+            chunk.len(),
+            0,
+            payload_bytes,
+        )? {
+            DownloadReadProgress::Continue(next_offset) => next_offset,
+            DownloadReadProgress::Complete => end_offset,
+        };
+        data.extend_from_slice(&chunk);
+    }
+
+    Ok((offset, data, completed_range, remote_file))
 }
 
 async fn download_remote_file_inner_with_controller(
@@ -818,7 +926,8 @@ async fn download_remote_file_inner_with_controller(
             .await?;
 
         let remote_attrs = sftp.metadata(remote_path).await.ok();
-        let total_size = remote_attrs.as_ref().and_then(|m| m.size).unwrap_or(0);
+        let remote_size = remote_attrs.as_ref().and_then(|m| m.size);
+        let total_size = remote_size.unwrap_or(0);
         controller.update_progress(0, total_size);
 
         let mut local_file = tokio::fs::File::create(&actual_path)
@@ -832,65 +941,103 @@ async fn download_remote_file_inner_with_controller(
         let mut last_progress = Instant::now();
         let mut bytes_transferred: u64 = 0;
 
-        if total_size > 0 {
-            let num_chunks = ((total_size + chunk_size - 1) / chunk_size) as usize;
-            let concurrency = pipeline_depth.min(num_chunks);
+        if let Some(total_size) = remote_size {
+            if total_size == 0 {
+                ensure_download_complete(
+                    remote_path,
+                    actual_path,
+                    total_size,
+                    bytes_transferred,
+                    request_kib,
+                    chunk_size as usize,
+                )?;
+            } else {
+                let num_chunks = ((total_size + chunk_size - 1) / chunk_size) as usize;
+                let concurrency = pipeline_depth.min(num_chunks);
 
-            let mut handle_pool: Vec<russh_sftp::client::fs::File> =
-                Vec::with_capacity(concurrency);
-            for _ in 0..concurrency {
-                handle_pool.push(sftp.open(remote_path).await.map_err(|e| {
-                    AppError::Channel(format!("Failed to open remote file: {}", e))
-                })?);
-            }
-
-            type Task = AppResult<(u64, Vec<u8>, russh_sftp::client::fs::File)>;
-            let mut join_set: JoinSet<Task> = JoinSet::new();
-            let mut next_offset: u64 = 0;
-
-            while let Some(fh) = handle_pool.pop() {
-                if next_offset >= total_size {
-                    break;
+                let mut handle_pool: Vec<russh_sftp::client::fs::File> =
+                    Vec::with_capacity(concurrency);
+                for _ in 0..concurrency {
+                    handle_pool.push(sftp.open(remote_path).await.map_err(|e| {
+                        AppError::Channel(format!("Failed to open remote file: {}", e))
+                    })?);
                 }
-                wait_for_transfer_chain(&controller, parent_controller.as_ref()).await?;
-                let len = chunk_size.min(total_size - next_offset) as usize;
-                let offset = next_offset;
-                next_offset += len as u64;
-                join_set.spawn(read_sftp_chunk(fh, offset, len));
-            }
 
-            while let Some(res) = join_set.join_next().await {
-                wait_for_transfer_chain(&controller, parent_controller.as_ref()).await?;
-                let (chunk_offset, data, fh) =
-                    res.map_err(|e| AppError::Channel(format!("Task panicked: {}", e)))??;
+                type Task = AppResult<(u64, Vec<u8>, bool, russh_sftp::client::fs::File)>;
+                let mut join_set: JoinSet<Task> = JoinSet::new();
+                let mut next_offset: u64 = 0;
 
-                if next_offset < total_size {
+                while let Some(fh) = handle_pool.pop() {
+                    if next_offset >= total_size {
+                        break;
+                    }
                     wait_for_transfer_chain(&controller, parent_controller.as_ref()).await?;
                     let len = chunk_size.min(total_size - next_offset) as usize;
                     let offset = next_offset;
                     next_offset += len as u64;
-                    join_set.spawn(read_sftp_chunk(fh, offset, len));
+                    join_set.spawn(read_sftp_chunk(
+                        fh,
+                        offset,
+                        len,
+                        remote_path.to_string(),
+                        total_size,
+                        chunk_size as usize,
+                    ));
                 }
 
-                local_file
-                    .seek(SeekFrom::Start(chunk_offset))
-                    .await
-                    .map_err(|e| AppError::Channel(format!("Local seek failed: {}", e)))?;
-                local_file
-                    .write_all(&data)
-                    .await
-                    .map_err(|e| AppError::Channel(format!("Local write failed: {}", e)))?;
+                while let Some(res) = join_set.join_next().await {
+                    wait_for_transfer_chain(&controller, parent_controller.as_ref()).await?;
+                    let (chunk_offset, data, completed_range, fh) =
+                        res.map_err(|e| AppError::Channel(format!("Task panicked: {}", e)))??;
 
-                bytes_transferred += data.len() as u64;
-                controller.update_progress(bytes_transferred, total_size);
+                    if !data.is_empty() {
+                        local_file
+                            .seek(SeekFrom::Start(chunk_offset))
+                            .await
+                            .map_err(|e| AppError::Channel(format!("Local seek failed: {}", e)))?;
+                        local_file
+                            .write_all(&data)
+                            .await
+                            .map_err(|e| AppError::Channel(format!("Local write failed: {}", e)))?;
 
-                if last_progress.elapsed() >= TRANSFER_PROGRESS_INTERVAL {
-                    last_progress = Instant::now();
-                    emit_parent_progress(app, parent_controller.as_ref());
-                    let _ = app.emit(
-                        "transfer-event",
-                        &controller.build_event("progress", total_size, None),
-                    );
+                        bytes_transferred = bytes_transferred.saturating_add(data.len() as u64);
+                        controller.update_progress(bytes_transferred, total_size);
+                    }
+
+                    if !completed_range {
+                        return Err(unexpected_download_eof_error(
+                            remote_path,
+                            actual_path,
+                            total_size,
+                            bytes_transferred,
+                            request_kib,
+                            chunk_size as usize,
+                        ));
+                    }
+
+                    if next_offset < total_size {
+                        wait_for_transfer_chain(&controller, parent_controller.as_ref()).await?;
+                        let len = chunk_size.min(total_size - next_offset) as usize;
+                        let offset = next_offset;
+                        next_offset += len as u64;
+                        join_set.spawn(read_sftp_chunk(
+                            fh,
+                            offset,
+                            len,
+                            remote_path.to_string(),
+                            total_size,
+                            chunk_size as usize,
+                        ));
+                    }
+
+                    if last_progress.elapsed() >= TRANSFER_PROGRESS_INTERVAL {
+                        last_progress = Instant::now();
+                        emit_parent_progress(app, parent_controller.as_ref());
+                        let _ = app.emit(
+                            "transfer-event",
+                            &controller.build_event("progress", total_size, None),
+                        );
+                    }
                 }
             }
         } else {
@@ -932,6 +1079,17 @@ async fn download_remote_file_inner_with_controller(
             .flush()
             .await
             .map_err(|e| AppError::Channel(format!("Flush failed: {}", e)))?;
+
+        if let Some(remote_size) = remote_size {
+            ensure_download_complete(
+                remote_path,
+                actual_path,
+                remote_size,
+                bytes_transferred,
+                request_kib,
+                chunk_size as usize,
+            )?;
+        }
 
         if ts.preserve_timestamps {
             if let Some(ref attrs) = remote_attrs {
@@ -2510,9 +2668,10 @@ async fn download_directory_file_with_session(
     }
 
     let mut bytes_transferred = 0u64;
+    let (request_kib, _, _) = sftp_pipeline_config(transfer_settings);
+    let payload_bytes = sftp_payload_size(request_kib);
     if file.size > 0 {
-        let (request_kib, _, _) = sftp_pipeline_config(transfer_settings);
-        let chunk_size = sftp_payload_size(request_kib) as u64;
+        let chunk_size = payload_bytes as u64;
         let remote_file = sftp.open(&file.remote_path).await.map_err(|e| {
             AppError::Channel(format!(
                 "Failed to open remote file {}: {}",
@@ -2527,14 +2686,24 @@ async fn download_directory_file_with_session(
             let data = remote_file.read_at(offset, len).await.map_err(|e| {
                 AppError::Channel(format!("SFTP read failed for {}: {}", file.remote_path, e))
             })?;
-            if data.is_empty() {
-                break;
-            }
-            next_offset = next_offset.saturating_add(data.len() as u64);
+            let progress = classify_download_read_progress(
+                &file.remote_path,
+                &file.local_path,
+                file.size,
+                offset,
+                bytes_transferred,
+                data.len(),
+                request_kib,
+                payload_bytes,
+            )?;
             local_file.write_all(&data).await.map_err(|e| {
                 AppError::Channel(format!("Local write failed for {}: {}", file.local_path, e))
             })?;
             bytes_transferred = bytes_transferred.saturating_add(data.len() as u64);
+            next_offset = match progress {
+                DownloadReadProgress::Continue(next_offset) => next_offset,
+                DownloadReadProgress::Complete => file.size,
+            };
         }
     }
 
@@ -2542,6 +2711,15 @@ async fn download_directory_file_with_session(
         .flush()
         .await
         .map_err(|e| AppError::Channel(format!("Flush failed for {}: {}", file.local_path, e)))?;
+
+    ensure_download_complete(
+        &file.remote_path,
+        &file.local_path,
+        file.size,
+        bytes_transferred,
+        request_kib,
+        payload_bytes,
+    )?;
 
     if transfer_settings.preserve_timestamps {
         if let Some(mtime) = file.mtime.filter(|mtime| *mtime > 0) {
@@ -2627,6 +2805,118 @@ async fn upload_directory_file_with_session(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn download_progress_allows_short_non_empty_reads_until_complete() {
+        let remote_size = 256 * 1024;
+        let request_kib = 256;
+        let payload_bytes = 256 * 1024;
+        let read_bytes = 64 * 1024;
+        let mut offset = 0;
+        let mut bytes_written = 0;
+
+        for _ in 0..3 {
+            let progress = classify_download_read_progress(
+                "/remote/file.bin",
+                "C:/local/file.bin",
+                remote_size,
+                offset,
+                bytes_written,
+                read_bytes as usize,
+                request_kib,
+                payload_bytes,
+            )
+            .expect("short non-empty read should continue");
+
+            offset = match progress {
+                DownloadReadProgress::Continue(next_offset) => next_offset,
+                DownloadReadProgress::Complete => panic!("download completed too early"),
+            };
+            bytes_written += read_bytes;
+        }
+
+        let progress = classify_download_read_progress(
+            "/remote/file.bin",
+            "C:/local/file.bin",
+            remote_size,
+            offset,
+            bytes_written,
+            read_bytes as usize,
+            request_kib,
+            payload_bytes,
+        )
+        .expect("final short read should complete");
+        assert_eq!(progress, DownloadReadProgress::Complete);
+        bytes_written += read_bytes;
+        assert!(
+            ensure_download_complete(
+                "/remote/file.bin",
+                "C:/local/file.bin",
+                remote_size,
+                bytes_written,
+                request_kib,
+                payload_bytes,
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn download_progress_rejects_empty_read_before_remote_size() {
+        let error = classify_download_read_progress(
+            "/remote/file.bin",
+            "C:/local/file.bin",
+            256 * 1024,
+            64 * 1024,
+            64 * 1024,
+            0,
+            256,
+            256 * 1024,
+        )
+        .expect_err("empty read before remote size should fail");
+
+        assert!(error.to_string().contains("Unexpected EOF"));
+        assert!(
+            error
+                .to_string()
+                .contains("expected 262144 bytes, got 65536 bytes")
+        );
+    }
+
+    #[test]
+    fn download_completion_rejects_short_written_count() {
+        let error = ensure_download_complete(
+            "/remote/file.bin",
+            "C:/local/file.bin",
+            256 * 1024,
+            192 * 1024,
+            256,
+            256 * 1024,
+        )
+        .expect_err("short written count should fail");
+
+        assert!(error.to_string().contains("Unexpected EOF"));
+        assert!(
+            error
+                .to_string()
+                .contains("expected 262144 bytes, got 196608 bytes")
+        );
+    }
+
+    #[test]
+    fn download_completion_accepts_empty_remote_file() {
+        assert!(
+            ensure_download_complete(
+                "/remote/empty.txt",
+                "C:/local/empty.txt",
+                0,
+                0,
+                256,
+                256 * 1024,
+            )
+            .is_ok()
+        );
+    }
 
     #[test]
     fn directory_concurrency_uses_fast_default_without_server_limits() {
