@@ -17,6 +17,7 @@ mod window_state;
 
 use std::sync::Arc;
 
+use crate::cmd::app::AppLockState;
 use crate::core::ai::AgentApprovalManager;
 use crate::core::sftp::TransferDuplicateManager;
 use crate::core::ssh::{HostKeyVerifyManager, PendingAuthManager, TunnelManager};
@@ -36,6 +37,7 @@ pub fn run() {
     let cloud_sync_manager = Arc::new(CloudSyncManager::new());
     let agent_approval_manager = Arc::new(AgentApprovalManager::new());
     let transfer_duplicate_manager = Arc::new(TransferDuplicateManager::new());
+    let app_lock_state = AppLockState::default();
 
     let builder = tauri::Builder::default();
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -69,6 +71,7 @@ pub fn run() {
         .manage(cloud_sync_manager.clone())
         .manage(agent_approval_manager.clone())
         .manage(transfer_duplicate_manager.clone())
+        .manage(app_lock_state)
         .setup(move |a| {
             app::setup(
                 a,
@@ -84,6 +87,8 @@ pub fn run() {
             cmd::app::open_download_dir,
             cmd::app::open_log_dir,
             cmd::app::get_app_runtime_info,
+            cmd::app::get_app_lock_state,
+            cmd::app::set_app_lock_state,
             cmd::app::open_child_window,
             cmd::app::open_transfer_target_directory,
             cmd::app::resolve_local_drop_paths,
@@ -138,6 +143,7 @@ pub fn run() {
             cmd::session::stop_recording,
             cmd::session::is_recording,
             cmd::session::save_session_transcript,
+            cmd::session::terminal_history_search,
             cmd::session::list_recording_sessions,
             cmd::session::set_recording_memory_limit,
             cmd::session::submit_otp_response,

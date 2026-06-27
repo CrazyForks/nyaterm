@@ -339,6 +339,7 @@ function App() {
   // Idle auto-lock
   useIdleLock(
     appSettings.security.enable_screen_lock ? appSettings.security.idle_lock_minutes : 0,
+    isLocked,
     () => setIsLocked(true),
   );
 

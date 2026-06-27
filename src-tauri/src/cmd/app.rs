@@ -1,11 +1,33 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use base64::Engine;
 use serde::Deserialize;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 use crate::error::{AppError, AppResult};
+
+#[derive(Default)]
+pub struct AppLockState {
+    locked: AtomicBool,
+}
+
+impl AppLockState {
+    pub fn is_locked(&self) -> bool {
+        self.locked.load(Ordering::SeqCst)
+    }
+
+    pub fn set_locked(&self, locked: bool) -> bool {
+        self.locked.swap(locked, Ordering::SeqCst)
+    }
+}
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppLockStateChangedPayload {
+    locked: bool,
+}
 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -73,6 +95,27 @@ pub fn get_app_runtime_info(
     state: tauri::State<'_, crate::runtime::AppRuntime>,
 ) -> crate::runtime::AppRuntimeInfo {
     state.info()
+}
+
+#[tauri::command]
+pub fn get_app_lock_state(state: tauri::State<'_, AppLockState>) -> bool {
+    state.is_locked()
+}
+
+#[tauri::command]
+pub fn set_app_lock_state(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppLockState>,
+    locked: bool,
+) -> bool {
+    let previous = state.set_locked(locked);
+    if previous != locked {
+        let _ = app.emit(
+            "app-lock-state-changed",
+            AppLockStateChangedPayload { locked },
+        );
+    }
+    locked
 }
 
 #[tauri::command]

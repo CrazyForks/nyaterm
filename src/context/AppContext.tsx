@@ -9,6 +9,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { useAppLockState } from "@/hooks/useAppLockState";
 import { DEFAULT_AI_SETTINGS } from "@/lib/aiSettings";
 import { DEFAULT_CLOUD_SYNC_SETTINGS } from "@/lib/cloudSync";
 import { getErrorMessage } from "@/lib/errors";
@@ -490,7 +491,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [broadcastToAll, setBroadcastToAll] = useState(false);
 
   // Idle Lock State
-  const [isLocked, setIsLocked] = useState(false);
+  const { isLocked, setIsLocked, lockStateLoaded } = useAppLockState();
 
   // Loading State
   const [settingsLoaded, setSettingsLoaded] = useState(false);
@@ -537,7 +538,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setAppSettings(DEFAULT_APP_SETTINGS);
         setSettingsLoaded(true);
       });
-  }, []);
+  }, [setIsLocked]);
 
   // Apply UI font size to root element
   useEffect(() => {
@@ -1262,6 +1263,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       syncGroups,
       broadcastToAll,
       isLocked,
+      setIsLocked,
       settingsLoaded,
       runtimeInfo,
       runtimeInfoLoaded,
@@ -1294,7 +1296,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   return (
     <AppContext.Provider value={contextValue}>
       <TerminalAppSettingsContext.Provider value={terminalAppSettingsValue}>
-        {children}
+        {lockStateLoaded && settingsLoaded ? children : null}
       </TerminalAppSettingsContext.Provider>
     </AppContext.Provider>
   );

@@ -1,3 +1,5 @@
+import { emit, listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useCallback, useEffect, useRef } from "react";
 
 /**
@@ -6,14 +8,15 @@ import { useCallback, useEffect, useRef } from "react";
  *
  * Tracked events: mousemove, mousedown, keydown, touchstart, scroll.
  */
-export function useIdleLock(minutes: number, onLock: () => void) {
+export function useIdleLock(minutes: number, locked: boolean, onLock: () => void) {
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const onLockRef = useRef(onLock);
+  const lastActivityEmitAtRef = useRef(0);
   onLockRef.current = onLock;
 
   const resetTimer = useCallback(() => {
     if (timerRef.current) clearTimeout(timerRef.current);
-    if (minutes > 0) {
+    if (minutes > 0 && !locked) {
       timerRef.current = setTimeout(
         () => {
           onLockRef.current();
@@ -21,10 +24,10 @@ export function useIdleLock(minutes: number, onLock: () => void) {
         minutes * 60 * 1000,
       );
     }
-  }, [minutes]);
+  }, [locked, minutes]);
 
   useEffect(() => {
-    if (minutes <= 0) {
+    if (minutes <= 0 || locked) {
       // Disabled – clear any existing timer and bail
       if (timerRef.current) {
         clearTimeout(timerRef.current);
@@ -45,15 +48,40 @@ export function useIdleLock(minutes: number, onLock: () => void) {
     resetTimer();
 
     // Reset on any user activity
+    const handleLocalActivity = () => {
+      resetTimer();
+
+      const now = Date.now();
+      if (now - lastActivityEmitAtRef.current < 1000) return;
+      lastActivityEmitAtRef.current = now;
+
+      emit("app-user-activity", {
+        at: now,
+        sourceWindowLabel: getCurrentWindow().label,
+      }).catch(() => {});
+    };
+
     for (const evt of EVENTS) {
-      window.addEventListener(evt, resetTimer, { passive: true });
+      window.addEventListener(evt, handleLocalActivity, { passive: true });
     }
 
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);
       for (const evt of EVENTS) {
-        window.removeEventListener(evt, resetTimer);
+        window.removeEventListener(evt, handleLocalActivity);
       }
     };
-  }, [minutes, resetTimer]);
+  }, [locked, minutes, resetTimer]);
+
+  useEffect(() => {
+    if (minutes <= 0 || locked) return;
+
+    const unlisten = listen("app-user-activity", () => {
+      resetTimer();
+    });
+
+    return () => {
+      unlisten.then((dispose) => dispose());
+    };
+  }, [locked, minutes, resetTimer]);
 }

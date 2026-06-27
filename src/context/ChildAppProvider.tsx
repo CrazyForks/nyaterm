@@ -1,6 +1,9 @@
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import LockScreen from "@/components/dialog/app/LockScreen";
+import { useAppLockState } from "@/hooks/useAppLockState";
+import { useIdleLock } from "@/hooks/useIdleLock";
 import { DEFAULT_AI_SETTINGS } from "@/lib/aiSettings";
 import { DEFAULT_CLOUD_SYNC_SETTINGS } from "@/lib/cloudSync";
 import {
@@ -186,6 +189,7 @@ export function ChildAppProvider({ children }: { children: ReactNode }) {
   const loaded = useRef(false);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [settingsLoaded, setSettingsLoaded] = useState(false);
+  const { isLocked, setIsLocked, lockStateLoaded } = useAppLockState();
 
   const loadAppSettings = useCallback(() => {
     invoke<AppSettings>("get_app_settings")
@@ -250,6 +254,12 @@ export function ChildAppProvider({ children }: { children: ReactNode }) {
       i18n.changeLanguage(appSettings.ui.language);
     }
   }, [appSettings.ui?.language]);
+
+  useIdleLock(
+    appSettings.security.enable_screen_lock ? appSettings.security.idle_lock_minutes : 0,
+    isLocked,
+    () => setIsLocked(true),
+  );
 
   const updateAppSettings = useCallback(
     (updates: Partial<AppSettings> | ((prev: AppSettings) => Partial<AppSettings>)) => {
@@ -350,8 +360,8 @@ export function ChildAppProvider({ children }: { children: ReactNode }) {
       setSyncGroups: noop,
       broadcastToAll: false,
       setBroadcastToAll: noop,
-      isLocked: false,
-      setIsLocked: noop,
+      isLocked,
+      setIsLocked,
       settingsLoaded,
       runtimeInfo: DEFAULT_RUNTIME_INFO,
       runtimeInfoLoaded: true,
@@ -370,9 +380,23 @@ export function ChildAppProvider({ children }: { children: ReactNode }) {
       updateAppSettings,
       replaceAppSettings,
       updateUi,
+      isLocked,
+      setIsLocked,
       settingsLoaded,
     ],
   );
 
-  return <AppContext.Provider value={contextValue}>{children}</AppContext.Provider>;
+  const showContent = lockStateLoaded && !isLocked;
+
+  return (
+    <AppContext.Provider value={contextValue}>
+      {showContent ? children : null}
+      {lockStateLoaded && isLocked ? (
+        <LockScreen
+          hasPassword={!!appSettings.security.master_password}
+          onUnlock={() => setIsLocked(false)}
+        />
+      ) : null}
+    </AppContext.Provider>
+  );
 }
