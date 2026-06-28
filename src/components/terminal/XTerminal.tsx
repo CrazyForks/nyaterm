@@ -95,6 +95,20 @@ import "@xterm/xterm/css/xterm.css";
 
 const BACKSPACE_INPUT = "\x7f";
 
+interface XTermInternalTrimSource {
+  _core?: {
+    _bufferService?: {
+      buffers?: {
+        normal?: {
+          lines?: {
+            onTrim?: (listener: (amount: number) => void) => { dispose: () => void };
+          };
+        };
+      };
+    };
+  };
+}
+
 function isWindowsPlatform() {
   return /win/i.test(navigator.platform || "");
 }
@@ -209,6 +223,7 @@ export default function XTerminal({
   const outputWriteQueueRef = useRef(Promise.resolve());
   const outputWriteInFlightRef = useRef(false);
   const lineTimestampsRef = useRef<Map<number, number>>(new Map());
+  const gutterLineOffsetRef = useRef(0);
   const sessionTypeRef = useRef(sessionType);
   const connectionIdRef = useRef(connectionId);
   const onReconnectedRef = useRef(onReconnected);
@@ -272,6 +287,8 @@ export default function XTerminal({
     const text = await readClipboardText();
     pasteTextRef.current(text);
   }, []);
+
+  const getGutterLineOffset = useCallback(() => gutterLineOffsetRef.current, []);
 
   useEffect(() => {
     sessionTypeRef.current = sessionType;
@@ -465,6 +482,7 @@ export default function XTerminal({
     if (!containerRef.current) return;
     setTerminalReady(false);
     lineTimestampsRef.current = new Map();
+    gutterLineOffsetRef.current = 0;
     queuedOutputChunksRef.current = [];
     queuedOutputCharsRef.current = 0;
     unackedOutputCharsRef.current = 0;
@@ -519,6 +537,13 @@ export default function XTerminal({
     terminal.loadAddon(webLinksAddon);
     terminal.loadAddon(searchAddon);
     terminal.open(containerRef.current);
+
+    const trimDisposable = (
+      terminal as Terminal & XTermInternalTrimSource
+    )._core?._bufferService?.buffers?.normal?.lines?.onTrim?.((amount) => {
+      if (amount <= 0) return;
+      gutterLineOffsetRef.current += amount;
+    });
 
     registerSearchAddon(searchAddon);
 
@@ -1220,6 +1245,7 @@ export default function XTerminal({
 
     const stampWrittenLines = (from: number, to: number, ts: number) => {
       if (!terminalAppSettingsRef.current?.terminal?.show_timestamps) return;
+      if (terminal.buffer.active.type === "alternate") return;
 
       const map = lineTimestampsRef.current;
       const start = Math.min(from, to);
@@ -1388,7 +1414,9 @@ export default function XTerminal({
               }
 
               const ts = Date.now();
-              const beforeLine = terminal.buffer.active.baseY + terminal.buffer.active.cursorY;
+              const beforeOffset = gutterLineOffsetRef.current;
+              const beforeLine =
+                beforeOffset + terminal.buffer.active.baseY + terminal.buffer.active.cursorY;
 
               try {
                 terminal.write(payload, () => {
@@ -1404,7 +1432,9 @@ export default function XTerminal({
                     return;
                   }
 
-                  const afterLine = terminal.buffer.active.baseY + terminal.buffer.active.cursorY;
+                  const afterOffset = gutterLineOffsetRef.current;
+                  const afterLine =
+                    afterOffset + terminal.buffer.active.baseY + terminal.buffer.active.cursorY;
 
                   stampWrittenLines(beforeLine, afterLine, ts);
 
@@ -1951,6 +1981,7 @@ export default function XTerminal({
       resizeDisposable.dispose();
       scrollDisposable.dispose();
       selectionDisposable.dispose();
+      trimDisposable?.dispose();
       removeLinkPopup();
       removePreviewListener();
       unregisterTerminalContext();
@@ -2086,8 +2117,10 @@ export default function XTerminal({
 
   useEffect(() => {
     const handleClear = () => {
-      if (!active || !terminalRef.current) return;
-      terminalRef.current.clear();
+      const terminal = terminalRef.current;
+      if (!active || !terminal) return;
+      terminal.clear();
+      gutterLineOffsetRef.current = 0;
     };
 
     window.addEventListener("nyaterm:clear-terminal", handleClear);
@@ -2227,6 +2260,7 @@ export default function XTerminal({
           showTimestamps={showTimestamps}
           showTimestampMilliseconds={showTimestampMilliseconds}
           lineTimestamps={lineTimestampsRef.current}
+          getLineOffset={getGutterLineOffset}
           sessionId={sessionId}
           suspended={performanceMode === "overloaded" || !visible}
         />

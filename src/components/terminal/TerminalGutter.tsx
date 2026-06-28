@@ -8,6 +8,7 @@ interface TerminalGutterProps {
   showTimestamps: boolean;
   showTimestampMilliseconds: boolean;
   lineTimestamps: Map<number, number>;
+  getLineOffset: () => number;
   sessionId?: string;
   suspended?: boolean;
 }
@@ -61,6 +62,7 @@ export default function TerminalGutter({
   showTimestamps,
   showTimestampMilliseconds,
   lineTimestamps,
+  getLineOffset,
   sessionId,
   suspended = false,
 }: TerminalGutterProps) {
@@ -103,12 +105,13 @@ export default function TerminalGutter({
     const viewportY = Math.max(0, Math.min(buf.baseY, viewportYRef.current || buf.viewportY));
     const rows = terminal.rows;
     const cursorAbsoluteY = buf.baseY + buf.cursorY;
+    const lineOffset = buf.type === "alternate" ? 0 : getLineOffset();
 
     const resolveTimestamp = (bufferLine: number): number | undefined => {
       let y = bufferLine;
 
       while (y >= 0) {
-        const ts = lineTimestamps.get(y);
+        const ts = buf.type === "alternate" ? undefined : lineTimestamps.get(lineOffset + y);
         if (ts) return ts;
 
         const line = buf.getLine(y);
@@ -127,14 +130,15 @@ export default function TerminalGutter({
       const isWrapped = line?.isWrapped ?? false;
       const hasRenderedRow = bufferLine <= cursorAbsoluteY;
       const ts = resolveTimestamp(bufferLine);
+      const logicalLine = lineOffset + bufferLine;
 
       nextLines.push({
-        key: bufferLine,
+        key: logicalLine,
         timestamp:
           showTimestamps && hasRenderedRow && !isWrapped && ts
             ? formatTimestamp(ts, showTimestampMilliseconds)
             : "",
-        lineNumber: showLineNumbers && hasRenderedRow && !isWrapped ? String(bufferLine + 1) : "",
+        lineNumber: showLineNumbers && hasRenderedRow && !isWrapped ? String(logicalLine + 1) : "",
       });
     }
 
@@ -150,6 +154,7 @@ export default function TerminalGutter({
     suspended,
     terminalRef,
     lineTimestamps,
+    getLineOffset,
     showLineNumbers,
     showTimestamps,
     showTimestampMilliseconds,
