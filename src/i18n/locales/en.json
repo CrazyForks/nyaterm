@@ -591,6 +591,7 @@
     "broadcastToAll": "Broadcast All",
     "checkForUpdates": "Check Updates",
     "clearTerminal": "Clear Terminal",
+    "commandPalette": "Command Palette",
     "copy": "Copy",
     "documentation": "Docs",
     "edit": "Edit",
@@ -1039,7 +1040,7 @@
     "open": "open",
     "saved": "Saved",
     "searchPlaceholder": "Search sessions or saved connections...",
-    "title": "Switch Session"
+    "title": "Command Palette"
   },
   "settings": {
     "actionLinks": "Action Links",
@@ -1464,7 +1465,7 @@
       "openChat": "Open Chat",
       "openSettings": "Open Settings",
       "prevTab": "Previous Tab",
-      "quickSwitch": "Quick Switch Session",
+      "quickSwitch": "Open Command Palette",
       "renameFile": "Rename File/Folder",
       "resetZoom": "Reset Zoom",
       "showAllCommands": "Show All Commands",
@@ -1488,6 +1489,8 @@
     "startupBehavior": "Startup",
     "startupRestore": "Restore tabs on startup",
     "startupRestoreDesc": "Reopen terminal sessions active before last close.",
+    "startupRestoreWindowLayout": "Restore split tab layout",
+    "startupRestoreWindowLayoutDesc": "Restore the left/right or top/bottom tab windows from the last close.",
     "strategyAsk": "Ask",
     "strategyOverwrite": "Overwrite",
     "strategyRename": "Rename (add suffix)",

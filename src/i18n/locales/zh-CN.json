@@ -591,6 +591,7 @@
     "broadcastToAll": "广播输入到所有会话",
     "checkForUpdates": "检查更新",
     "clearTerminal": "清除当前终端",
+    "commandPalette": "命令面板",
     "copy": "复制",
     "documentation": "文档",
     "edit": "编辑",
@@ -1039,7 +1040,7 @@
     "open": "打开",
     "saved": "已保存",
     "searchPlaceholder": "搜索会话或已保存连接...",
-    "title": "切换会话"
+    "title": "命令面板"
   },
   "settings": {
     "actionLinks": "快捷动作",
@@ -1464,7 +1465,7 @@
       "openChat": "打开聊天",
       "openSettings": "打开设置",
       "prevTab": "上一个标签",
-      "quickSwitch": "快速切换会话",
+      "quickSwitch": "打开命令面板",
       "renameFile": "重命名文件/目录",
       "resetZoom": "重置缩放",
       "showAllCommands": "显示所有命令",
@@ -1488,6 +1489,8 @@
     "startupBehavior": "启动行为",
     "startupRestore": "启动时恢复先前的会话标签",
     "startupRestoreDesc": "自动重新打开在应用程序上次关闭时处于活动状态的终端会话。",
+    "startupRestoreWindowLayout": "恢复标签窗口分屏布局",
+    "startupRestoreWindowLayoutDesc": "恢复上次关闭前的左右或上下标签窗口布局。",
     "strategyAsk": "每次询问",
     "strategyOverwrite": "覆盖",
     "strategyRename": "重命名（添加后缀）",
