@@ -9,6 +9,8 @@ use crate::core::{
     SessionCommand, SessionHandle, SessionInfo, SessionManager, SessionType, SharedCwd,
 };
 use crate::error::{AppError, AppResult};
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use tauri::{AppHandle, Manager};
 use tokio::sync::{mpsc, oneshot};
@@ -28,67 +30,101 @@ async fn create_authenticated_connection(
         (None, None)
     };
 
-    if let Some(jump_config) = config.proxy_jump.as_deref() {
-        tracing::info!(
-            jump_host = %jump_config.host,
-            jump_port = jump_config.port,
-            target_host = %config.host,
-            target_port = config.port,
-            "Creating SSH connection via ProxyJump"
-        );
+    let (target_handle, jumps) =
+        connect_authenticated_chain(app, config, ssh_client_config, x11_tx).await?;
+    Ok((
+        Arc::new(SshConnectionHandles::new(target_handle, jumps)),
+        x11_rx,
+    ))
+}
 
-        let jump_handler = SshHandler::new(
-            app.clone(),
-            jump_config.host.clone(),
-            jump_config.port,
-            config.owner_window_label.clone(),
-        );
-        let mut jump_handle =
-            connect_with_proxy(jump_config, ssh_client_config.clone(), jump_handler).await?;
-        let jump_password_error =
-            "Authentication failed for jump host: invalid credentials".to_string();
-        let jump_key_error = "Authentication failed for jump host: key rejected".to_string();
-        authenticate_handle(
-            &mut jump_handle,
-            jump_config,
-            app,
-            &jump_password_error,
-            &jump_key_error,
-        )
-        .await?;
-        tracing::info!(
-            jump_host = %jump_config.host,
-            jump_port = jump_config.port,
-            "ProxyJump host authenticated"
-        );
+async fn connect_authenticated_chain(
+    app: &AppHandle,
+    config: &SshConfig,
+    ssh_client_config: Arc<russh::client::Config>,
+    x11_tx: Option<mpsc::UnboundedSender<super::x11_forwarding::X11ChannelOpen>>,
+) -> AppResult<(SshRawHandle, Vec<SshRawHandle>)> {
+    connect_authenticated_chain_boxed(app, config, ssh_client_config, x11_tx).await
+}
 
-        let channel = jump_handle
-            .channel_open_direct_tcpip(&config.host, config.port.into(), "127.0.0.1", 0)
-            .await
-            .map_err(|error| {
-                AppError::Channel(format!("Failed to open ProxyJump channel: {}", error))
-            })?;
-        tracing::info!(
-            jump_host = %jump_config.host,
-            jump_port = jump_config.port,
-            target_host = %config.host,
-            target_port = config.port,
-            "ProxyJump direct-tcpip channel opened"
-        );
+fn connect_authenticated_chain_boxed<'a>(
+    app: &'a AppHandle,
+    config: &'a SshConfig,
+    ssh_client_config: Arc<russh::client::Config>,
+    x11_tx: Option<mpsc::UnboundedSender<super::x11_forwarding::X11ChannelOpen>>,
+) -> Pin<Box<dyn Future<Output = AppResult<(SshRawHandle, Vec<SshRawHandle>)>> + Send + 'a>> {
+    Box::pin(async move {
+        if let Some(jump_config) = config.proxy_jump.as_deref() {
+            tracing::info!(
+                jump_host = %jump_config.host,
+                jump_port = jump_config.port,
+                target_host = %config.host,
+                target_port = config.port,
+                "Creating SSH connection via ProxyJump"
+            );
 
-        let mut target_handler = SshHandler::new(
+            let (jump_handle, mut jumps) =
+                connect_authenticated_chain(app, jump_config, ssh_client_config.clone(), None)
+                    .await?;
+            let channel = {
+                let jump = jump_handle.lock().await;
+                jump.channel_open_direct_tcpip(&config.host, config.port.into(), "127.0.0.1", 0)
+                    .await
+                    .map_err(|error| {
+                        AppError::Channel(format!("Failed to open ProxyJump channel: {}", error))
+                    })?
+            };
+            tracing::info!(
+                jump_host = %jump_config.host,
+                jump_port = jump_config.port,
+                target_host = %config.host,
+                target_port = config.port,
+                "ProxyJump direct-tcpip channel opened"
+            );
+
+            let mut target_handler = SshHandler::new(
+                app.clone(),
+                config.host.clone(),
+                config.port,
+                config.owner_window_label.clone(),
+            );
+            if let Some(tx) = x11_tx {
+                target_handler = target_handler.with_x11_sender(tx);
+            }
+            let mut target_handle =
+                connect_via_stream(channel.into_stream(), ssh_client_config, target_handler)
+                    .await?;
+            authenticate_handle(
+                &mut target_handle,
+                config,
+                app,
+                "Authentication failed: invalid credentials",
+                "Authentication failed: key rejected",
+            )
+            .await?;
+            tracing::info!(
+                host = %config.host,
+                port = config.port,
+                "SSH host authenticated via ProxyJump"
+            );
+
+            jumps.push(jump_handle);
+            let target_handle: SshRawHandle = Arc::new(tokio::sync::Mutex::new(target_handle));
+            return Ok((target_handle, jumps));
+        }
+
+        let mut handler = SshHandler::new(
             app.clone(),
             config.host.clone(),
             config.port,
             config.owner_window_label.clone(),
         );
-        if let Some(tx) = x11_tx.clone() {
-            target_handler = target_handler.with_x11_sender(tx);
+        if let Some(tx) = x11_tx {
+            handler = handler.with_x11_sender(tx);
         }
-        let mut target_handle =
-            connect_via_stream(channel.into_stream(), ssh_client_config, target_handler).await?;
+        let mut handle = connect_with_proxy(config, ssh_client_config, handler).await?;
         authenticate_handle(
-            &mut target_handle,
+            &mut handle,
             config,
             app,
             "Authentication failed: invalid credentials",
@@ -98,43 +134,12 @@ async fn create_authenticated_connection(
         tracing::info!(
             host = %config.host,
             port = config.port,
-            "Target host authenticated via ProxyJump"
+            "SSH host authenticated"
         );
 
-        let target_handle: SshRawHandle = Arc::new(tokio::sync::Mutex::new(target_handle));
-        let jump_handle: SshRawHandle = Arc::new(tokio::sync::Mutex::new(jump_handle));
-        return Ok((
-            Arc::new(SshConnectionHandles::new(target_handle, Some(jump_handle))),
-            x11_rx,
-        ));
-    }
-
-    let mut handler = SshHandler::new(
-        app.clone(),
-        config.host.clone(),
-        config.port,
-        config.owner_window_label.clone(),
-    );
-    if let Some(tx) = x11_tx {
-        handler = handler.with_x11_sender(tx);
-    }
-    let mut handle = connect_with_proxy(config, ssh_client_config, handler).await?;
-    authenticate_handle(
-        &mut handle,
-        config,
-        app,
-        "Authentication failed: invalid credentials",
-        "Authentication failed: key rejected",
-    )
-    .await?;
-    tracing::info!(
-        host = %config.host,
-        port = config.port,
-        "Target host authenticated"
-    );
-
-    let handle: SshRawHandle = Arc::new(tokio::sync::Mutex::new(handle));
-    Ok((Arc::new(SshConnectionHandles::new(handle, None)), x11_rx))
+        let handle: SshRawHandle = Arc::new(tokio::sync::Mutex::new(handle));
+        Ok((handle, Vec::new()))
+    })
 }
 
 fn set_owner_window_label(config: &mut SshConfig, owner_window_label: Option<String>) {

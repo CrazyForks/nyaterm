@@ -23,6 +23,7 @@ interface ConnectionItemProps {
 
 interface ConnectionDetailsTooltipProps {
   conn: SavedConnection;
+  savedConnections: SavedConnection[];
   t: TFunction;
 }
 
@@ -47,7 +48,47 @@ function formatOptionalDetailValue(value: string | number | null | undefined): s
   return text || null;
 }
 
-function getConnectionDetailRows(conn: SavedConnection, t: TFunction): ConnectionDetailRow[] {
+function formatJumpHostChain(
+  conn: SavedConnection,
+  savedConnections: SavedConnection[],
+  t: TFunction,
+): string | null {
+  if (conn.type !== "ssh" || !conn.network?.proxy_jump_id) {
+    return null;
+  }
+
+  const connectionsById = new Map(
+    savedConnections.map((connection) => [connection.id, connection]),
+  );
+  const seen = new Set<string>([conn.id]);
+  const labels: string[] = [];
+  let currentJumpId = conn.network.proxy_jump_id;
+
+  while (currentJumpId) {
+    if (seen.has(currentJumpId)) {
+      labels.push(t("savedConnections.jumpHostCycle"));
+      break;
+    }
+
+    seen.add(currentJumpId);
+    const jump = connectionsById.get(currentJumpId);
+    if (!jump) {
+      labels.push(t("savedConnections.jumpHostMissing"));
+      break;
+    }
+
+    labels.push(jump.name);
+    currentJumpId = jump.network?.proxy_jump_id ?? "";
+  }
+
+  return labels.length > 0 ? labels.join(" -> ") : null;
+}
+
+function getConnectionDetailRows(
+  conn: SavedConnection,
+  savedConnections: SavedConnection[],
+  t: TFunction,
+): ConnectionDetailRow[] {
   const description =
     formatOptionalDetailValue(conn.description) ?? t("savedConnections.noDescription");
 
@@ -112,22 +153,35 @@ function getConnectionDetailRows(conn: SavedConnection, t: TFunction): Connectio
       });
       return rows;
     }
-    default:
-      return [
+    default: {
+      const rows: ConnectionDetailRow[] = [
         { label: t("savedConnections.host"), value: formatRequiredDetailValue(conn.host, t) },
         { label: t("savedConnections.port"), value: formatRequiredDetailValue(conn.port, t) },
         { label: t("savedConnections.user"), value: formatRequiredDetailValue(conn.username, t) },
-        {
-          label: t("savedConnections.description"),
-          value: description,
-          multiline: true,
-        },
       ];
+      const jumpHostChain = formatJumpHostChain(conn, savedConnections, t);
+      if (jumpHostChain) {
+        rows.push({
+          label: t("savedConnections.jumpHostChain"),
+          value: jumpHostChain,
+          multiline: true,
+        });
+      }
+      rows.push({
+        label: t("savedConnections.description"),
+        value: description,
+        multiline: true,
+      });
+      return rows;
+    }
   }
 }
 
-function ConnectionDetailsTooltip({ conn, t }: ConnectionDetailsTooltipProps) {
-  const rows = useMemo(() => getConnectionDetailRows(conn, t), [conn, t]);
+function ConnectionDetailsTooltip({ conn, savedConnections, t }: ConnectionDetailsTooltipProps) {
+  const rows = useMemo(
+    () => getConnectionDetailRows(conn, savedConnections, t),
+    [conn, savedConnections, t],
+  );
 
   return (
     <TooltipContent
@@ -165,6 +219,7 @@ export default function ConnectionItem({ conn, indented, depth = 0 }: Connection
     isPointerDragEnabled,
     dragTarget,
     selectedConnectionIds,
+    savedConnections,
     handleConnect,
     handleConnectOnly,
     handleConnectSelected,
@@ -333,7 +388,7 @@ export default function ConnectionItem({ conn, indented, depth = 0 }: Connection
                   </span>
                 </span>
               </TooltipTrigger>
-              <ConnectionDetailsTooltip conn={conn} t={t} />
+              <ConnectionDetailsTooltip conn={conn} savedConnections={savedConnections} t={t} />
             </Tooltip>
             <div
               className="pointer-events-none sticky right-2 z-10 ml-auto flex shrink-0 items-center gap-0.5 rounded px-1 opacity-0 backdrop-blur-sm transition-opacity group-hover/item:pointer-events-auto group-hover/item:opacity-100"

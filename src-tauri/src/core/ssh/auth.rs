@@ -5,7 +5,7 @@ use russh::client::{self, KeyboardInteractiveAuthResponse};
 use russh::{MethodKind, MethodSet};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::{Mutex, oneshot};
@@ -331,7 +331,15 @@ fn runtime_prompt_kind(reason: SshAuthPromptReason, available_methods: &[String]
 
 pub(crate) fn load_saved_ssh_config(app: &AppHandle, connection_id: &str) -> AppResult<SshConfig> {
     let conn = crate::config::load_connection_by_id(app, connection_id)?;
-    resolve_saved_ssh_config(app, &conn, Some(connection_id.to_string()), true)
+    let mut visited = HashSet::new();
+    visited.insert(connection_id.to_string());
+    resolve_saved_ssh_config(
+        app,
+        &conn,
+        Some(connection_id.to_string()),
+        true,
+        &mut visited,
+    )
 }
 
 fn resolve_saved_ssh_config(
@@ -339,12 +347,13 @@ fn resolve_saved_ssh_config(
     conn: &crate::config::SavedConnection,
     connection_id: Option<String>,
     include_proxy_jump: bool,
+    visited_proxy_jumps: &mut HashSet<String>,
 ) -> AppResult<SshConfig> {
     let proxy = resolve_proxy(app, conn)?;
     let (host, port, username) = resolve_ssh_target(conn)?;
     let auth = resolve_auth(app, conn)?;
     let proxy_jump = if include_proxy_jump {
-        resolve_proxy_jump(app, conn)?
+        resolve_proxy_jump(app, conn, visited_proxy_jumps)?
     } else {
         None
     };
@@ -463,6 +472,7 @@ fn resolve_password_material(
 fn resolve_proxy_jump(
     app: &AppHandle,
     conn: &crate::config::SavedConnection,
+    visited_proxy_jumps: &mut HashSet<String>,
 ) -> AppResult<Option<Box<SshConfig>>> {
     let proxy_jump_id = conn
         .network
@@ -473,20 +483,17 @@ fn resolve_proxy_jump(
         return Ok(None);
     };
 
+    if !visited_proxy_jumps.insert(proxy_jump_id.to_string()) {
+        return Err(AppError::Config(format!(
+            "ProxyJump chain contains a cycle at '{}'",
+            proxy_jump_id
+        )));
+    }
+
     let jump_conn = crate::config::load_connection_by_id(app, proxy_jump_id)?;
     if !matches!(jump_conn.config, crate::config::ConnectionType::Ssh { .. }) {
         return Err(AppError::Config(
             "Only SSH connections can be used as jump hosts".to_string(),
-        ));
-    }
-    if jump_conn
-        .network
-        .as_ref()
-        .and_then(|network| network.proxy_jump_id.as_deref())
-        .is_some()
-    {
-        return Err(AppError::Config(
-            "Jump hosts cannot use another jump host".to_string(),
         ));
     }
 
@@ -494,7 +501,8 @@ fn resolve_proxy_jump(
         app,
         &jump_conn,
         Some(proxy_jump_id.to_string()),
-        false,
+        true,
+        visited_proxy_jumps,
     )?)))
 }
 

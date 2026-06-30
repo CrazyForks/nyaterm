@@ -2,6 +2,7 @@ use crate::config::{self, Group, QuickCommandsConfig, SavedConnection, SavedPass
 use crate::core::{QuickCommandsImportResult, QuickCommandsImportSource, QuickCommandsStore};
 use crate::error::{AppError, AppResult};
 use crate::utils::crypto;
+use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
 use tauri::Emitter;
@@ -144,36 +145,61 @@ fn validate_proxy_jump_config(
         ));
     }
 
-    if connection.id == proxy_jump_id {
-        return Err(AppError::Config(
-            "A connection cannot use itself as a jump host".to_string(),
-        ));
-    }
+    let mut visited = HashSet::new();
+    visited.insert(connection.id.as_str());
+    let mut current_jump_id = proxy_jump_id;
 
-    let jump_connection = existing_connections
-        .iter()
-        .find(|candidate| candidate.id == proxy_jump_id)
-        .ok_or_else(|| AppError::Config(format!("Jump host '{}' not found", proxy_jump_id)))?;
+    loop {
+        if !visited.insert(current_jump_id) {
+            if connection.id == current_jump_id {
+                return Err(AppError::Config(
+                    "A connection cannot use itself as a jump host".to_string(),
+                ));
+            }
+            return Err(AppError::Config(format!(
+                "ProxyJump chain contains a cycle at '{}'",
+                current_jump_id
+            )));
+        }
 
-    if !matches!(jump_connection.config, config::ConnectionType::Ssh { .. }) {
-        return Err(AppError::Config(
-            "Only SSH connections can be used as jump hosts".to_string(),
-        ));
-    }
+        let jump_connection =
+            find_connection_for_proxy_jump(connection, existing_connections, current_jump_id)
+                .ok_or_else(|| {
+                    AppError::Config(format!("Jump host '{}' not found", current_jump_id))
+                })?;
 
-    if jump_connection
-        .network
-        .as_ref()
-        .and_then(|network| network.proxy_jump_id.as_deref())
-        .is_some()
-    {
-        return Err(AppError::Config(
-            "A connection that already uses a jump host cannot be selected as a jump host"
-                .to_string(),
-        ));
+        if !matches!(jump_connection.config, config::ConnectionType::Ssh { .. }) {
+            return Err(AppError::Config(
+                "Only SSH connections can be used as jump hosts".to_string(),
+            ));
+        }
+
+        let Some(next_jump_id) = jump_connection
+            .network
+            .as_ref()
+            .and_then(|network| network.proxy_jump_id.as_deref())
+        else {
+            break;
+        };
+
+        current_jump_id = next_jump_id;
     }
 
     Ok(())
+}
+
+fn find_connection_for_proxy_jump<'a>(
+    edited_connection: &'a SavedConnection,
+    existing_connections: &'a [SavedConnection],
+    id: &str,
+) -> Option<&'a SavedConnection> {
+    if edited_connection.id == id {
+        return Some(edited_connection);
+    }
+
+    existing_connections
+        .iter()
+        .find(|candidate| candidate.id == id)
 }
 
 #[cfg(test)]
@@ -318,13 +344,60 @@ mod tests {
     }
 
     #[test]
-    fn rejects_multi_hop_jump_hosts() {
+    fn accepts_multi_hop_ssh_jump_hosts() {
         let connection = ssh_connection("target", Some("jump"));
         let jump = ssh_connection("jump", Some("another"));
+        let another = ssh_connection("another", None);
+
+        validate_proxy_jump_config(&connection, &[jump, another]).unwrap();
+    }
+
+    #[test]
+    fn rejects_missing_jump_in_multi_hop_chain() {
+        let connection = ssh_connection("target", Some("jump"));
+        let jump = ssh_connection("jump", Some("missing"));
 
         let error = validate_proxy_jump_config(&connection, &[jump]).unwrap_err();
 
-        assert!(error.to_string().contains("already uses a jump host"));
+        assert!(error.to_string().contains("Jump host 'missing' not found"));
+    }
+
+    #[test]
+    fn rejects_indirect_proxy_jump_cycles() {
+        let connection = ssh_connection("target", Some("jump"));
+        let jump = ssh_connection("jump", Some("another"));
+        let another = ssh_connection("another", Some("target"));
+
+        let error = validate_proxy_jump_config(&connection, &[jump, another]).unwrap_err();
+
+        assert!(error.to_string().contains("cannot use itself"));
+    }
+
+    #[test]
+    fn rejects_cycles_between_jump_hosts() {
+        let connection = ssh_connection("target", Some("jump"));
+        let jump = ssh_connection("jump", Some("another"));
+        let another = ssh_connection("another", Some("jump"));
+
+        let error = validate_proxy_jump_config(&connection, &[jump, another]).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("ProxyJump chain contains a cycle")
+        );
+    }
+
+    #[test]
+    fn validates_proxy_jump_against_edited_connection() {
+        let connection = ssh_connection("jump", Some("another"));
+        let stale_connection = ssh_connection("jump", None);
+        let another = ssh_connection("another", Some("jump"));
+
+        let error =
+            validate_proxy_jump_config(&connection, &[stale_connection, another]).unwrap_err();
+
+        assert!(error.to_string().contains("cannot use itself"));
     }
 
     #[test]

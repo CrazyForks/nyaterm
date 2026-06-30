@@ -33,6 +33,7 @@ export interface SavedConnectionsContextValue {
   dragTarget: DragTarget | null;
   expandedGroups: Set<string>;
   selectedConnectionIds: Set<string>;
+  savedConnections: SavedConnection[];
 
   // List actions
   toggleGroup: (id: string) => void;

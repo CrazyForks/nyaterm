@@ -72,12 +72,12 @@ pub(crate) type SshRawHandle = Arc<Mutex<client::Handle<SshHandler>>>;
 
 pub struct SshConnectionHandles {
     target: SshRawHandle,
-    jump: Option<SshRawHandle>,
+    jumps: Vec<SshRawHandle>,
 }
 
 impl SshConnectionHandles {
-    pub fn new(target: SshRawHandle, jump: Option<SshRawHandle>) -> Self {
-        Self { target, jump }
+    pub fn new(target: SshRawHandle, jumps: Vec<SshRawHandle>) -> Self {
+        Self { target, jumps }
     }
 
     pub fn target_handle(&self) -> SshRawHandle {
@@ -86,7 +86,12 @@ impl SshConnectionHandles {
 
     #[allow(dead_code)]
     pub fn jump_handle(&self) -> Option<SshRawHandle> {
-        self.jump.clone()
+        self.jumps.last().cloned()
+    }
+
+    #[allow(dead_code)]
+    pub fn jump_handles(&self) -> Vec<SshRawHandle> {
+        self.jumps.clone()
     }
 }
 

@@ -298,37 +298,82 @@ export default function NewSessionPage() {
     return buildGroupPath(groupId, groupsById);
   }, [groupId, groupsById]);
 
+  const savedConnectionsById = useMemo(
+    () => new Map(savedConnections.map((connection) => [connection.id, connection])),
+    [savedConnections],
+  );
+
+  const getJumpHostChain = useCallback(
+    (connection: SavedConnection) => {
+      const chain: SavedConnection[] = [];
+      const seen = new Set<string>([connection.id]);
+      let current = connection;
+
+      while (current.network?.proxy_jump_id) {
+        const next = savedConnectionsById.get(current.network.proxy_jump_id);
+        if (!next || seen.has(next.id)) {
+          break;
+        }
+        chain.push(next);
+        seen.add(next.id);
+        current = next;
+      }
+
+      return chain;
+    },
+    [savedConnectionsById],
+  );
+
+  const wouldCreateJumpHostCycle = useCallback(
+    (candidate: SavedConnection) => {
+      if (!editId) {
+        return false;
+      }
+      if (candidate.id === editId) {
+        return true;
+      }
+
+      return getJumpHostChain(candidate).some((jump) => jump.id === editId);
+    },
+    [editId, getJumpHostChain],
+  );
+
   const jumpHostOptions = useMemo<ConnectionOption[]>(() => {
     return savedConnections
       .filter((connection) => connection.type === "ssh" && connection.id !== editId)
       .map((connection) => {
         const groupPath = buildGroupPath(connection.group_id, groupsById);
+        const jumpChain = getJumpHostChain(connection);
+        const chainLabel =
+          jumpChain.length > 0
+            ? [connection.name, ...jumpChain.map((jump) => jump.name)].join(" -> ")
+            : "";
         const subtitle = [
           groupPath,
           connection.host && `${connection.host}:${connection.port ?? 22}`,
           connection.username,
+          chainLabel,
         ]
           .filter(Boolean)
           .join(" · ");
+        const disabled = wouldCreateJumpHostCycle(connection);
 
         return {
           connection,
           groupPath,
           subtitle,
-          searchText: [connection.name, connection.host, connection.username, groupPath]
+          searchText: [connection.name, connection.host, connection.username, groupPath, chainLabel]
             .filter(Boolean)
             .join(" "),
-          disabled: !!connection.network?.proxy_jump_id,
-          disabledReason: connection.network?.proxy_jump_id
-            ? t("dialog.proxyJumpAlreadyConfigured")
-            : undefined,
+          disabled,
+          disabledReason: disabled ? t("dialog.proxyJumpCycleDetected") : undefined,
         };
       })
       .sort((left, right) => {
         const pathSort = sortLabel(left.groupPath, right.groupPath);
         return pathSort !== 0 ? pathSort : sortLabel(left.connection.name, right.connection.name);
       });
-  }, [editId, groupsById, savedConnections, t]);
+  }, [editId, getJumpHostChain, groupsById, savedConnections, t, wouldCreateJumpHostCycle]);
 
   const handleClose = () => {
     if (connecting) return;

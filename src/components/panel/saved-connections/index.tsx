@@ -1193,6 +1193,7 @@ export default function SavedConnections({
     dragTarget,
     expandedGroups,
     selectedConnectionIds,
+    savedConnections,
     toggleGroup,
     handleConnect,
     handleConnectOnly,
