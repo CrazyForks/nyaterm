@@ -567,6 +567,7 @@ export const DEFAULT_AI_SETTINGS: AISettings = {
   max_agent_steps: 10,
   agent_step_timeout_ms: 30000,
   terminal_output_lines: 10,
+  agent_background_execution_enabled: false,
   agent_command_execution_mode: "confirm_each",
   agent_smart_auto_execute_max_risk: "low",
 };

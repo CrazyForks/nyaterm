@@ -1088,6 +1088,11 @@ fn pty_session_thread(
                     );
                 }
             }
+            SessionCommand::CancelCapture { marker_id } => {
+                if let Ok(mut proc) = capture_processor.lock() {
+                    proc.cancel(&marker_id);
+                }
+            }
             SessionCommand::Resize { cols, rows } => {
                 let _ = master.resize(PtySize {
                     rows: rows as u16,

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::process::Stdio;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -7,14 +8,17 @@ use genai::chat::{
     ChatMessage, ChatOptions, ChatRequest, ChatStreamEvent, Tool, ToolCall, ToolChoice,
     ToolResponse,
 };
+use russh::ChannelMsg;
 use serde::Deserialize;
 use serde_json::json;
 use tauri::{AppHandle, Emitter};
+use tokio::process::Command;
 use tokio::sync::oneshot;
 
 use crate::config::{AgentCommandExecutionMode, AiExecutionProfile, AiSettings, RiskLevel};
 use crate::core::capture;
-use crate::core::session::{SessionCommand, SessionManager};
+use crate::core::session::{SessionCommand, SessionManager, SessionType};
+use crate::core::ssh::SshConnectionHandles;
 use crate::error::{AppError, AppResult};
 
 use super::history::{append_ai_audit, append_message, save_user_message};
@@ -84,6 +88,95 @@ const DEFAULT_AGENT_STEP_TIMEOUT_MS: u64 = 30_000;
 const TOOL_EXECUTE_COMMAND: &str = "execute_command";
 const TOOL_FINAL_ANSWER: &str = "final_answer";
 
+struct ForegroundCaptureGuard {
+    app: AppHandle,
+    session_manager: Arc<SessionManager>,
+    terminal_session_id: String,
+    marker_id: String,
+    capture_event: String,
+    finished: bool,
+}
+
+impl ForegroundCaptureGuard {
+    fn new(
+        app: &AppHandle,
+        session_manager: Arc<SessionManager>,
+        terminal_session_id: &str,
+        marker_id: String,
+    ) -> Self {
+        Self {
+            app: app.clone(),
+            session_manager,
+            terminal_session_id: terminal_session_id.to_string(),
+            capture_event: format!("ai-capture-{terminal_session_id}"),
+            marker_id,
+            finished: false,
+        }
+    }
+
+    fn finish(
+        &mut self,
+        output: String,
+        exit_code: Option<i32>,
+        duration_ms: u64,
+        truncated: bool,
+    ) {
+        self.finished = true;
+        let _ = self.app.emit(
+            &self.capture_event,
+            AiCaptureEvent::CommandEnd {
+                output,
+                exit_code,
+                duration_ms,
+                truncated,
+            },
+        );
+    }
+
+    async fn cancel_capture(&self) {
+        let _ = self
+            .session_manager
+            .send_command(
+                &self.terminal_session_id,
+                SessionCommand::CancelCapture {
+                    marker_id: self.marker_id.clone(),
+                },
+            )
+            .await;
+    }
+}
+
+impl Drop for ForegroundCaptureGuard {
+    fn drop(&mut self) {
+        if self.finished {
+            return;
+        }
+
+        let app = self.app.clone();
+        let capture_event = self.capture_event.clone();
+        let session_manager = self.session_manager.clone();
+        let terminal_session_id = self.terminal_session_id.clone();
+        let marker_id = self.marker_id.clone();
+        tokio::spawn(async move {
+            let _ = session_manager
+                .send_command(
+                    &terminal_session_id,
+                    SessionCommand::CancelCapture { marker_id },
+                )
+                .await;
+            let _ = app.emit(
+                &capture_event,
+                AiCaptureEvent::CommandEnd {
+                    output: "AI command capture was cancelled before completion.".to_string(),
+                    exit_code: None,
+                    duration_ms: 0,
+                    truncated: false,
+                },
+            );
+        });
+    }
+}
+
 fn emit_agent_step(app: &AppHandle, stream_id: &str, payload: AgentStepPayload) {
     let _ = app.emit(format!("ai-stream-{stream_id}").as_str(), payload);
 }
@@ -124,7 +217,7 @@ fn emit_agent_error(app: &AppHandle, stream_id: &str, session_id: &str, error: &
 /// can render a styled inline block showing the command and its output.
 async fn execute_command_on_session(
     app: &AppHandle,
-    session_manager: &SessionManager,
+    session_manager: Arc<SessionManager>,
     terminal_session_id: &str,
     command: &str,
     timeout_ms: u64,
@@ -153,7 +246,7 @@ async fn execute_command_on_session(
     ) {
         return send_command_without_capture(
             app,
-            session_manager,
+            session_manager.as_ref(),
             terminal_session_id,
             command,
             step_index,
@@ -186,6 +279,12 @@ async fn execute_command_on_session(
             step_index,
         },
     );
+    let mut capture_guard = ForegroundCaptureGuard::new(
+        app,
+        session_manager.clone(),
+        terminal_session_id,
+        marker_id.clone(),
+    );
 
     session_manager
         .send_command(
@@ -217,6 +316,7 @@ async fn execute_command_on_session(
             })
         }
         Ok(Err(_)) => {
+            capture_guard.cancel_capture().await;
             tracing::warn!(
                 terminal_session_id = %terminal_session_id,
                 marker_id = %marker_id,
@@ -227,6 +327,7 @@ async fn execute_command_on_session(
             ))
         }
         Err(_) => {
+            capture_guard.cancel_capture().await;
             tracing::warn!(
                 terminal_session_id = %terminal_session_id,
                 marker_id = %marker_id,
@@ -246,14 +347,11 @@ async fn execute_command_on_session(
         Err(e) => (e.to_string(), false),
     };
 
-    let _ = app.emit(
-        &capture_event,
-        AiCaptureEvent::CommandEnd {
-            output: terminal_output,
-            exit_code: result.as_ref().ok().and_then(|o| o.exit_code),
-            duration_ms: result.as_ref().map(|o| o.duration_ms).unwrap_or(0),
-            truncated,
-        },
+    capture_guard.finish(
+        terminal_output,
+        result.as_ref().ok().and_then(|o| o.exit_code),
+        result.as_ref().map(|o| o.duration_ms).unwrap_or(0),
+        truncated,
     );
 
     result
@@ -302,6 +400,185 @@ async fn send_command_without_capture(
     );
 
     Ok(observation)
+}
+
+enum BackgroundExecutionTarget {
+    Ssh(Arc<SshConnectionHandles>),
+    Local { cwd: Option<String> },
+    Unsupported(SessionType),
+}
+
+async fn resolve_background_execution_target(
+    session_manager: &SessionManager,
+    terminal_session_id: &str,
+) -> AppResult<BackgroundExecutionTarget> {
+    let sessions = session_manager.sessions.lock().await;
+    let session = sessions.get(terminal_session_id).ok_or_else(|| {
+        AppError::SessionNotFound(format!("Session '{}' not found", terminal_session_id))
+    })?;
+
+    match session.info.session_type {
+        SessionType::SSH => {
+            let ssh_handle = session
+                .ssh_handle
+                .as_ref()
+                .ok_or_else(|| {
+                    AppError::Config("SSH session is missing its command handle".to_string())
+                })?
+                .clone()
+                .downcast::<SshConnectionHandles>()
+                .map_err(|_| AppError::Config("Failed to access SSH command handle".to_string()))?;
+            Ok(BackgroundExecutionTarget::Ssh(ssh_handle))
+        }
+        SessionType::Local => {
+            let cwd_arc = session.cwd.clone();
+            drop(sessions);
+            let cwd = cwd_arc.lock().await.clone();
+            Ok(BackgroundExecutionTarget::Local { cwd })
+        }
+        ref session_type => Ok(BackgroundExecutionTarget::Unsupported(session_type.clone())),
+    }
+}
+
+async fn execute_command_in_background(
+    session_manager: &SessionManager,
+    terminal_session_id: &str,
+    command: &str,
+    timeout_ms: u64,
+) -> AppResult<CommandObservation> {
+    match resolve_background_execution_target(session_manager, terminal_session_id).await? {
+        BackgroundExecutionTarget::Ssh(ssh_handle) => {
+            execute_ssh_background_command(ssh_handle, command, timeout_ms).await
+        }
+        BackgroundExecutionTarget::Local { cwd } => {
+            execute_local_background_command(command, cwd.as_deref(), timeout_ms).await
+        }
+        BackgroundExecutionTarget::Unsupported(session_type) => Err(AppError::Config(format!(
+            "Background AI command execution is not supported for {:?} sessions",
+            session_type
+        ))),
+    }
+}
+
+async fn execute_ssh_background_command(
+    ssh_handle: Arc<SshConnectionHandles>,
+    command: &str,
+    timeout_ms: u64,
+) -> AppResult<CommandObservation> {
+    let started = Instant::now();
+    let handle_mtx = ssh_handle.target_handle();
+    let timeout_dur = Duration::from_millis(timeout_ms);
+
+    let result = tokio::time::timeout(timeout_dur, async {
+        let mut channel = {
+            let handle = handle_mtx.lock().await;
+            handle.channel_open_session().await.map_err(|error| {
+                AppError::Channel(format!("Failed to open SSH exec channel: {error}"))
+            })?
+        };
+
+        channel
+            .exec(true, command.as_bytes())
+            .await
+            .map_err(|error| {
+                AppError::Channel(format!("Failed to execute SSH command: {error}"))
+            })?;
+
+        let mut stdout = String::new();
+        let mut stderr = String::new();
+        let mut exit_code: Option<i32> = None;
+
+        while let Some(msg) = channel.wait().await {
+            match msg {
+                ChannelMsg::Data { ref data } => {
+                    stdout.push_str(&String::from_utf8_lossy(data));
+                }
+                ChannelMsg::ExtendedData { ref data, .. } => {
+                    stderr.push_str(&String::from_utf8_lossy(data));
+                }
+                ChannelMsg::ExitStatus { exit_status } => {
+                    exit_code = Some(exit_status as i32);
+                }
+                ChannelMsg::Eof => break,
+                _ => {}
+            }
+        }
+
+        Ok(CommandObservation {
+            output: merge_command_output(&stdout, &stderr),
+            exit_code,
+            duration_ms: started.elapsed().as_millis() as u64,
+        })
+    })
+    .await;
+
+    match result {
+        Ok(result) => result,
+        Err(_) => Ok(CommandObservation {
+            output: "Background command timed out.".to_string(),
+            exit_code: None,
+            duration_ms: timeout_ms,
+        }),
+    }
+}
+
+async fn execute_local_background_command(
+    command: &str,
+    cwd: Option<&str>,
+    timeout_ms: u64,
+) -> AppResult<CommandObservation> {
+    let started = Instant::now();
+    let timeout_dur = Duration::from_millis(timeout_ms);
+    let mut child = local_shell_command(command);
+    if let Some(cwd) = cwd.filter(|value| !value.trim().is_empty()) {
+        child.current_dir(cwd);
+    }
+    child.kill_on_drop(true);
+    child.stdout(Stdio::piped());
+    child.stderr(Stdio::piped());
+
+    match tokio::time::timeout(timeout_dur, child.output()).await {
+        Ok(Ok(output)) => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            Ok(CommandObservation {
+                output: merge_command_output(&stdout, &stderr),
+                exit_code: output.status.code(),
+                duration_ms: started.elapsed().as_millis() as u64,
+            })
+        }
+        Ok(Err(error)) => Err(AppError::Channel(format!(
+            "Failed to run local background command: {error}"
+        ))),
+        Err(_) => Ok(CommandObservation {
+            output: "Background command timed out.".to_string(),
+            exit_code: None,
+            duration_ms: timeout_ms,
+        }),
+    }
+}
+
+#[cfg(windows)]
+fn local_shell_command(command: &str) -> Command {
+    let mut child = Command::new("cmd");
+    child.args(["/C", command]);
+    child
+}
+
+#[cfg(not(windows))]
+fn local_shell_command(command: &str) -> Command {
+    let mut child = Command::new("sh");
+    child.args(["-lc", command]);
+    child
+}
+
+fn merge_command_output(stdout: &str, stderr: &str) -> String {
+    match (stdout.is_empty(), stderr.is_empty()) {
+        (true, true) => String::new(),
+        (false, true) => stdout.to_string(),
+        (true, false) => stderr.to_string(),
+        (false, false) => format!("{stdout}\n{stderr}"),
+    }
 }
 
 fn truncate_output_for_terminal(output: &str, max_lines: u16) -> (String, bool) {
@@ -1157,6 +1434,47 @@ mod tests {
             ApprovalDecision::Auto
         );
     }
+
+    #[test]
+    fn merge_command_output_preserves_stdout_and_stderr() {
+        assert_eq!(merge_command_output("", ""), "");
+        assert_eq!(merge_command_output("out", ""), "out");
+        assert_eq!(merge_command_output("", "err"), "err");
+        assert_eq!(merge_command_output("out", "err"), "out\nerr");
+    }
+
+    #[tokio::test]
+    async fn background_execution_rejects_unsupported_session_types() {
+        use crate::core::{SessionHandle, SessionInfo};
+        use tokio::sync::{Mutex, mpsc};
+
+        let manager = SessionManager::new();
+        let (cmd_tx, _cmd_rx) = mpsc::unbounded_channel::<SessionCommand>();
+        manager
+            .add_session(SessionHandle {
+                info: SessionInfo {
+                    id: "serial-1".to_string(),
+                    name: "serial-1".to_string(),
+                    session_type: SessionType::Serial,
+                    connected: true,
+                    owner_window_label: None,
+                    ai_execution_profile: AiExecutionProfile::SendOnly,
+                    injection_active: false,
+                },
+                cmd_tx,
+                ssh_config: None,
+                ssh_handle: None,
+                cwd: Arc::new(Mutex::new(None)),
+                remote_fs: None,
+            })
+            .await;
+
+        let error = execute_command_in_background(&manager, "serial-1", "help", 1000)
+            .await
+            .expect_err("serial sessions should not support background execution");
+
+        assert!(error.to_string().contains("not supported"));
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1510,17 +1828,26 @@ pub(super) async fn run_agent_stream(
                     });
                 }
 
-                let obs = match execute_command_on_session(
-                    &app,
-                    &session_manager,
-                    &terminal_session_id,
-                    &command,
-                    step_timeout,
-                    step_index,
-                    settings.terminal_output_lines,
-                )
-                .await
-                {
+                let obs = match if settings.agent_background_execution_enabled {
+                    execute_command_in_background(
+                        &session_manager,
+                        &terminal_session_id,
+                        &command,
+                        step_timeout,
+                    )
+                    .await
+                } else {
+                    execute_command_on_session(
+                        &app,
+                        session_manager.clone(),
+                        &terminal_session_id,
+                        &command,
+                        step_timeout,
+                        step_index,
+                        settings.terminal_output_lines,
+                    )
+                    .await
+                } {
                     Ok(obs) => obs,
                     Err(e) => {
                         let step = AgentStepPayload {

@@ -401,6 +401,11 @@ fn serial_session_thread(
                 let _ = p.write_all(&wrapped_command);
                 let _ = p.flush();
             }
+            SessionCommand::CancelCapture { marker_id } => {
+                if let Ok(mut proc) = capture_processor.lock() {
+                    proc.cancel(&marker_id);
+                }
+            }
             SessionCommand::Resize { .. } => {}
             SessionCommand::PauseOutput => {
                 let (lock, _) = &*output_pause;

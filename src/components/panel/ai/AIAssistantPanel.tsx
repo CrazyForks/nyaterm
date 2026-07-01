@@ -22,6 +22,7 @@ import { toast } from "sonner";
 import { AIAssistantDialogs } from "@/components/dialog/ai/AIAssistantDialogs";
 import PanelHeader from "@/components/layout/PanelHeader";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -134,6 +135,7 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
   const prismStyle = useMemo(() => buildPrismThemeFromColors(theme.colors), [theme.colors]);
   const mode = aiSettings.default_mode ?? "ask";
   const agentExecutionMode = aiSettings.agent_command_execution_mode ?? "confirm_each";
+  const agentBackgroundExecutionEnabled = aiSettings.agent_background_execution_enabled ?? false;
 
   const allSessionPanes = useMemo(() => {
     const panes: SessionPane[] = [];
@@ -864,6 +866,15 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
     setAutoModeDialogOpen(false);
   }, [pendingExecutionMode, updateAgentExecutionMode]);
 
+  const updateAgentBackgroundExecution = useCallback(
+    (enabled: boolean) => {
+      updateAppSettings({
+        ai: { ...aiSettings, agent_background_execution_enabled: enabled },
+      });
+    },
+    [aiSettings, updateAppSettings],
+  );
+
   const renderExecutionModeItem = useCallback(
     (
       value: AIAgentCommandExecutionMode,
@@ -1027,6 +1038,28 @@ function AIAssistantPanel({ activePane, activeConnection, intent }: AIAssistantP
             t("ai.executionModeAutoDesc"),
             true,
           )}
+          <div className="-mx-1 my-1 h-px bg-border" />
+          <div className="px-2 py-1.5 text-xs font-medium">{t("ai.executionMethod")}</div>
+          <button
+            type="button"
+            className="flex w-full items-start gap-2 rounded px-2 py-2 text-left hover:bg-muted/60"
+            onClick={() => updateAgentBackgroundExecution(!agentBackgroundExecutionEnabled)}
+          >
+            <Checkbox
+              checked={agentBackgroundExecutionEnabled}
+              className="mt-0.5 shrink-0"
+              onCheckedChange={(checked) => updateAgentBackgroundExecution(checked === true)}
+              onClick={(event) => event.stopPropagation()}
+            />
+            <span className="min-w-0 flex-1">
+              <span className="block text-xs font-medium text-foreground">
+                {t("ai.backgroundAgentExecution")}
+              </span>
+              <span className="mt-0.5 block text-[0.6875rem] leading-4 text-muted-foreground">
+                {t("ai.backgroundAgentExecutionDesc")}
+              </span>
+            </span>
+          </button>
         </div>
       ) : null}
 

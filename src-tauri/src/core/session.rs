@@ -107,6 +107,8 @@ pub enum SessionCommand {
         wrapped_command: Vec<u8>,
         result_tx: oneshot::Sender<CapturedOutput>,
     },
+    /// AI capture: cancel a marker-wrapped command capture that no longer has a caller.
+    CancelCapture { marker_id: String },
     /// ZMODEM: user accepted a download — save to this directory.
     ZmodemAcceptDownload { save_dir: std::path::PathBuf },
     /// ZMODEM: user accepted an upload — send these files.

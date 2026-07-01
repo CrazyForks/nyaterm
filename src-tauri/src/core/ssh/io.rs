@@ -466,6 +466,9 @@ pub(super) async fn ssh_io_loop(
                         capture_processor.register(marker_id, result_tx);
                         let _ = channel.data(&wrapped_command[..]).await;
                     }
+                    Some(SessionCommand::CancelCapture { marker_id }) => {
+                        capture_processor.cancel(&marker_id);
+                    }
                     Some(SessionCommand::Close) => {
                         let _ = channel.close().await;
                         break "local-close-request";

@@ -703,6 +703,7 @@ export interface AISettings {
   max_agent_steps?: number | null;
   agent_step_timeout_ms?: number | null;
   terminal_output_lines: number;
+  agent_background_execution_enabled: boolean;
   agent_command_execution_mode: AIAgentCommandExecutionMode;
   agent_smart_auto_execute_max_risk: RiskLevel;
 }

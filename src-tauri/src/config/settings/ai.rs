@@ -161,6 +161,8 @@ pub struct AiSettings {
     #[serde(default = "default_terminal_output_lines")]
     pub terminal_output_lines: u16,
     #[serde(default)]
+    pub agent_background_execution_enabled: bool,
+    #[serde(default)]
     pub agent_command_execution_mode: AgentCommandExecutionMode,
     #[serde(default = "default_agent_smart_auto_execute_max_risk")]
     pub agent_smart_auto_execute_max_risk: RiskLevel,
@@ -437,6 +439,7 @@ impl Default for AiSettings {
             max_agent_steps: Some(10),
             agent_step_timeout_ms: Some(30_000),
             terminal_output_lines: default_terminal_output_lines(),
+            agent_background_execution_enabled: false,
             agent_command_execution_mode: AgentCommandExecutionMode::ConfirmEach,
             agent_smart_auto_execute_max_risk: default_agent_smart_auto_execute_max_risk(),
         }
@@ -681,6 +684,7 @@ mod tests {
             AgentCommandExecutionMode::ConfirmEach
         );
         assert_eq!(settings.agent_smart_auto_execute_max_risk, RiskLevel::Low);
+        assert!(!settings.agent_background_execution_enabled);
     }
 
     #[test]
@@ -691,5 +695,16 @@ mod tests {
             settings.request_user_agent.as_str(),
             AI_REQUEST_USER_AGENT_DEFAULT
         );
+    }
+
+    #[test]
+    fn legacy_ai_settings_default_background_execution_to_disabled() {
+        let settings: AiSettings = serde_json::from_value(serde_json::json!({
+            "schema_version": 3,
+            "enabled": true
+        }))
+        .expect("legacy settings should deserialize");
+
+        assert!(!settings.agent_background_execution_enabled);
     }
 }
