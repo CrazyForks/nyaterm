@@ -348,13 +348,7 @@ export default function FileTransfer({ activeSessionId }: FileTransferProps) {
   const visibleTransfers = useMemo(() => {
     const topLevelTransfers = transfers.filter((transfer) => !transfer.parentId);
     const filteredTransfers = activeSessionId
-      ? topLevelTransfers.filter(
-          (transfer) =>
-            transfer.sessionId === activeSessionId ||
-            transfer.status === "queued" ||
-            transfer.status === "transferring" ||
-            transfer.status === "paused",
-        )
+      ? topLevelTransfers.filter((transfer) => transfer.sessionId === activeSessionId)
       : topLevelTransfers;
 
     return [...filteredTransfers].sort((a, b) => {
