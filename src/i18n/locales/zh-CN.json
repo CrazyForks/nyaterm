@@ -1480,6 +1480,7 @@
       "resetZoom": "重置缩放",
       "showAllCommands": "显示所有命令",
       "switchTab": "切换到标签 1-9",
+      "temporarySshLink": "临时链接",
       "toggleLeftSidebar": "切换左侧边栏",
       "toggleRightSidebar": "切换右侧边栏",
       "zoomIn": "放大",
@@ -1726,6 +1727,18 @@
     "sshAddressCopied": "SSH 地址已复制",
     "sshAdvanced": "SSH 高级",
     "unsplit": "合并所有窗格"
+  },
+  "temporarySsh": {
+    "connect": "连接",
+    "description": "粘贴或输入 SSH 目标，将直接打开一个不保存的 SSH 会话。",
+    "empty": "请输入 SSH 目标。",
+    "inlinePassword": "不支持在输入中携带密码。需要凭据时 NyaTerm 会再询问。",
+    "invalidInput": "请输入有效的 SSH 命令、URL 或主机。",
+    "invalidPort": "端口必须在 1 到 65535 之间。",
+    "missingHost": "请输入要连接的主机。",
+    "placeholder": "ssh -p 2222 root@192.168.142.100",
+    "title": "临时链接",
+    "unsupportedOption": "临时链接暂时只支持 SSH 直连。"
   },
   "terminal": {
     "actionLinkAltClickHint": "Alt+单击：更多动作",
