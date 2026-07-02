@@ -68,6 +68,33 @@ pub struct DockerComposeService {
     pub containers: Vec<DockerComposeServiceContainer>,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct DockerContainerMount {
+    pub kind: String,
+    pub source: String,
+    pub destination: String,
+    pub mode: String,
+    pub rw: bool,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct DockerContainerNetwork {
+    pub name: String,
+    pub ip_address: String,
+}
+
+#[derive(Debug, Clone, Serialize, Default, PartialEq)]
+pub struct DockerContainerDetails {
+    pub stats: Option<DockerContainerStats>,
+    pub started_at: String,
+    pub finished_at: String,
+    pub restart_count: u64,
+    pub entrypoint: String,
+    pub command: String,
+    pub mounts: Vec<DockerContainerMount>,
+    pub networks: Vec<DockerContainerNetwork>,
+}
+
 #[derive(Debug, Clone, Serialize, Default, PartialEq)]
 pub struct RemoteDockerOverview {
     pub available: bool,
@@ -98,42 +125,53 @@ version=$(printf "%s" "$version" | tr "\t\r\n" "   ")
 printf "DOCKER_VERSION\t%s\n" "$version"
 
 docker ps -a --no-trunc --format "CONTAINER\t{{.ID}}\t{{.Names}}\t{{.Image}}\t{{.Status}}\t{{.State}}\t{{.Ports}}\t{{.CreatedAt}}\t{{.Size}}" 2>/dev/null
-docker stats --no-stream --no-trunc --format "CONTAINER_STATS\t{{.ID}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.MemPerc}}\t{{.NetIO}}\t{{.BlockIO}}\t{{.PIDs}}" 2>/dev/null
-docker images --no-trunc --format "IMAGE\t{{.ID}}\t{{.Repository}}\t{{.Tag}}\t{{.Size}}\t{{.CreatedSince}}" 2>/dev/null
-docker volume ls --format "VOLUME\t{{.Driver}}\t{{.Name}}" 2>/dev/null
-docker network ls --no-trunc --format "NETWORK\t{{.ID}}\t{{.Name}}\t{{.Driver}}\t{{.Scope}}" 2>/dev/null
 
 if docker compose version >/dev/null 2>&1; then
   printf "COMPOSE_AVAILABLE\t1\n"
-  printf "COMPOSE_JSON_BEGIN\n"
-  docker compose ls --format json 2>/dev/null || true
-  printf "\nCOMPOSE_JSON_END\n"
 else
   printf "COMPOSE_AVAILABLE\t0\n"
 fi
 '"#;
 
+pub const DOCKER_IMAGES_SCRIPT: &str = r#"docker images --no-trunc --format "IMAGE\t{{.ID}}\t{{.Repository}}\t{{.Tag}}\t{{.Size}}\t{{.CreatedSince}}" 2>/dev/null"#;
+
+pub const DOCKER_VOLUMES_SCRIPT: &str =
+    r#"docker volume ls --format "VOLUME\t{{.Driver}}\t{{.Name}}" 2>/dev/null"#;
+
+pub const DOCKER_NETWORKS_SCRIPT: &str = r#"docker network ls --no-trunc --format "NETWORK\t{{.ID}}\t{{.Name}}\t{{.Driver}}\t{{.Scope}}" 2>/dev/null"#;
+
+pub const DOCKER_COMPOSE_PROJECTS_SCRIPT: &str = r#"sh -c '
+if ! docker compose version >/dev/null 2>&1; then
+  exit 0
+fi
+docker compose ls --format json 2>/dev/null || true
+'"#;
+
+pub const DOCKER_CONTAINER_DETAILS_INSPECT_BEGIN: &str = "INSPECT_JSON_BEGIN";
+pub const DOCKER_CONTAINER_DETAILS_INSPECT_END: &str = "INSPECT_JSON_END";
+pub const DOCKER_CONTAINER_DETAILS_STATS_BEGIN: &str = "CONTAINER_STATS_BEGIN";
+pub const DOCKER_CONTAINER_DETAILS_STATS_END: &str = "CONTAINER_STATS_END";
+
+pub fn docker_container_details_script(container_id: &str) -> String {
+    format!(
+        "printf '{inspect_begin}\\n'; \
+         docker inspect {container_id} || exit $?; \
+         printf '\\n{inspect_end}\\n'; \
+         printf '{stats_begin}\\n'; \
+         docker stats --no-stream --no-trunc --format \"CONTAINER_STATS\\t{{{{.ID}}}}\\t{{{{.CPUPerc}}}}\\t{{{{.MemUsage}}}}\\t{{{{.MemPerc}}}}\\t{{{{.NetIO}}}}\\t{{{{.BlockIO}}}}\\t{{{{.PIDs}}}}\" {container_id} 2>/dev/null || true; \
+         printf '\\n{stats_end}\\n'",
+        container_id = sh_quote_local(container_id),
+        inspect_begin = DOCKER_CONTAINER_DETAILS_INSPECT_BEGIN,
+        inspect_end = DOCKER_CONTAINER_DETAILS_INSPECT_END,
+        stats_begin = DOCKER_CONTAINER_DETAILS_STATS_BEGIN,
+        stats_end = DOCKER_CONTAINER_DETAILS_STATS_END,
+    )
+}
+
 pub fn parse_docker_overview_output(output: &str) -> RemoteDockerOverview {
     let mut overview = RemoteDockerOverview::default();
-    let mut stats_rows: Vec<(String, DockerContainerStats)> = Vec::new();
-    let mut compose_json = String::new();
-    let mut in_compose_json = false;
 
     for line in output.lines() {
-        if line == "COMPOSE_JSON_BEGIN" {
-            in_compose_json = true;
-            continue;
-        }
-        if line == "COMPOSE_JSON_END" {
-            in_compose_json = false;
-            continue;
-        }
-        if in_compose_json {
-            compose_json.push_str(line);
-            compose_json.push('\n');
-            continue;
-        }
-
         let cols: Vec<&str> = line.split('\t').collect();
         if cols.is_empty() {
             continue;
@@ -160,49 +198,10 @@ pub fn parse_docker_overview_output(output: &str) -> RemoteDockerOverview {
                 size: cols[8].to_string(),
                 stats: None,
             }),
-            "CONTAINER_STATS" if cols.len() >= 8 => {
-                stats_rows.push((
-                    cols[1].to_string(),
-                    DockerContainerStats {
-                        cpu_percent: parse_percent(cols[2]),
-                        memory_usage: cols[3].to_string(),
-                        memory_percent: parse_percent(cols[4]),
-                        net_io: cols[5].to_string(),
-                        block_io: cols[6].to_string(),
-                        pids: cols[7].to_string(),
-                    },
-                ));
-            }
-            "IMAGE" if cols.len() >= 6 => overview.images.push(DockerImage {
-                id: cols[1].to_string(),
-                repository: cols[2].to_string(),
-                tag: cols[3].to_string(),
-                size: cols[4].to_string(),
-                created_since: cols[5].to_string(),
-            }),
-            "VOLUME" if cols.len() >= 3 => overview.volumes.push(DockerVolume {
-                driver: cols[1].to_string(),
-                name: cols[2].to_string(),
-            }),
-            "NETWORK" if cols.len() >= 5 => overview.networks.push(DockerNetwork {
-                id: cols[1].to_string(),
-                name: cols[2].to_string(),
-                driver: cols[3].to_string(),
-                scope: cols[4].to_string(),
-            }),
             _ => {}
         }
     }
 
-    for container in &mut overview.containers {
-        if let Some((_, stats)) = stats_rows.iter().find(|(id, _)| {
-            id == &container.id || container.id.starts_with(id) || id.starts_with(&container.id)
-        }) {
-            container.stats = Some(stats.clone());
-        }
-    }
-
-    overview.compose_projects = parse_compose_projects(&compose_json);
     overview
 }
 
@@ -210,7 +209,51 @@ fn parse_percent(value: &str) -> f64 {
     value.trim().trim_end_matches('%').parse().unwrap_or(0.0)
 }
 
-fn parse_compose_projects(raw: &str) -> Vec<DockerComposeProject> {
+pub fn parse_docker_images_output(output: &str) -> Vec<DockerImage> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let cols: Vec<&str> = line.split('\t').collect();
+            (cols.first() == Some(&"IMAGE") && cols.len() >= 6).then(|| DockerImage {
+                id: cols[1].to_string(),
+                repository: cols[2].to_string(),
+                tag: cols[3].to_string(),
+                size: cols[4].to_string(),
+                created_since: cols[5].to_string(),
+            })
+        })
+        .collect()
+}
+
+pub fn parse_docker_volumes_output(output: &str) -> Vec<DockerVolume> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let cols: Vec<&str> = line.split('\t').collect();
+            (cols.first() == Some(&"VOLUME") && cols.len() >= 3).then(|| DockerVolume {
+                driver: cols[1].to_string(),
+                name: cols[2].to_string(),
+            })
+        })
+        .collect()
+}
+
+pub fn parse_docker_networks_output(output: &str) -> Vec<DockerNetwork> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let cols: Vec<&str> = line.split('\t').collect();
+            (cols.first() == Some(&"NETWORK") && cols.len() >= 5).then(|| DockerNetwork {
+                id: cols[1].to_string(),
+                name: cols[2].to_string(),
+                driver: cols[3].to_string(),
+                scope: cols[4].to_string(),
+            })
+        })
+        .collect()
+}
+
+pub fn parse_compose_projects(raw: &str) -> Vec<DockerComposeProject> {
     let raw = raw.trim();
     if raw.is_empty() {
         return Vec::new();
@@ -249,6 +292,201 @@ fn parse_compose_projects(raw: &str) -> Vec<DockerComposeProject> {
             })
         })
         .collect()
+}
+
+pub fn parse_docker_container_details_output(output: &str) -> DockerContainerDetails {
+    let (inspect_raw, stats_raw) = split_container_details_output(output);
+    let stats = parse_docker_stats_output(&stats_raw).into_iter().next();
+    let mut details = parse_container_inspect_json(&inspect_raw);
+    details.stats = stats;
+    details
+}
+
+pub fn parse_docker_stats_output(output: &str) -> Vec<DockerContainerStats> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let cols: Vec<&str> = line.split('\t').collect();
+            (cols.first() == Some(&"CONTAINER_STATS") && cols.len() >= 8).then(|| {
+                DockerContainerStats {
+                    cpu_percent: parse_percent(cols[2]),
+                    memory_usage: cols[3].to_string(),
+                    memory_percent: parse_percent(cols[4]),
+                    net_io: cols[5].to_string(),
+                    block_io: cols[6].to_string(),
+                    pids: cols[7].to_string(),
+                }
+            })
+        })
+        .collect()
+}
+
+fn split_container_details_output(output: &str) -> (String, String) {
+    enum Section {
+        None,
+        Inspect,
+        Stats,
+    }
+
+    let mut inspect = String::new();
+    let mut stats = String::new();
+    let mut section = Section::None;
+
+    for line in output.lines() {
+        match line {
+            DOCKER_CONTAINER_DETAILS_INSPECT_BEGIN => {
+                section = Section::Inspect;
+                continue;
+            }
+            DOCKER_CONTAINER_DETAILS_INSPECT_END => {
+                section = Section::None;
+                continue;
+            }
+            DOCKER_CONTAINER_DETAILS_STATS_BEGIN => {
+                section = Section::Stats;
+                continue;
+            }
+            DOCKER_CONTAINER_DETAILS_STATS_END => {
+                section = Section::None;
+                continue;
+            }
+            _ => {}
+        }
+
+        match section {
+            Section::Inspect => {
+                inspect.push_str(line);
+                inspect.push('\n');
+            }
+            Section::Stats => {
+                stats.push_str(line);
+                stats.push('\n');
+            }
+            Section::None => {}
+        }
+    }
+
+    (inspect, stats)
+}
+
+fn parse_container_inspect_json(raw: &str) -> DockerContainerDetails {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(raw.trim()) else {
+        return DockerContainerDetails::default();
+    };
+    let Some(item) = value.as_array().and_then(|items| items.first()) else {
+        return DockerContainerDetails::default();
+    };
+
+    let state = item.get("State").and_then(serde_json::Value::as_object);
+    let config = item.get("Config").and_then(serde_json::Value::as_object);
+
+    DockerContainerDetails {
+        stats: None,
+        started_at: state
+            .and_then(|state| json_object_string_field(state, "StartedAt"))
+            .unwrap_or("")
+            .to_string(),
+        finished_at: state
+            .and_then(|state| json_object_string_field(state, "FinishedAt"))
+            .unwrap_or("")
+            .to_string(),
+        restart_count: item
+            .get("RestartCount")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0),
+        entrypoint: config
+            .and_then(|config| json_object_command_field(config, "Entrypoint"))
+            .unwrap_or_default(),
+        command: config
+            .and_then(|config| json_object_command_field(config, "Cmd"))
+            .unwrap_or_default(),
+        mounts: parse_container_mounts(item.get("Mounts")),
+        networks: parse_container_networks(item.get("NetworkSettings")),
+    }
+}
+
+fn parse_container_mounts(value: Option<&serde_json::Value>) -> Vec<DockerContainerMount> {
+    value
+        .and_then(serde_json::Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .map(|item| DockerContainerMount {
+                    kind: json_string_field(item, &["Type", "type"])
+                        .unwrap_or("")
+                        .to_string(),
+                    source: json_string_field(item, &["Source", "source"])
+                        .unwrap_or("")
+                        .to_string(),
+                    destination: json_string_field(item, &["Destination", "destination"])
+                        .unwrap_or("")
+                        .to_string(),
+                    mode: json_string_field(item, &["Mode", "mode"])
+                        .unwrap_or("")
+                        .to_string(),
+                    rw: item
+                        .get("RW")
+                        .and_then(serde_json::Value::as_bool)
+                        .unwrap_or(false),
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn parse_container_networks(value: Option<&serde_json::Value>) -> Vec<DockerContainerNetwork> {
+    let Some(networks) = value
+        .and_then(|value| value.get("Networks"))
+        .and_then(serde_json::Value::as_object)
+    else {
+        return Vec::new();
+    };
+
+    let mut items: Vec<DockerContainerNetwork> = networks
+        .iter()
+        .map(|(name, value)| DockerContainerNetwork {
+            name: name.to_string(),
+            ip_address: json_string_field(value, &["IPAddress", "GlobalIPv6Address"])
+                .unwrap_or("")
+                .to_string(),
+        })
+        .collect();
+    items.sort_by(|left, right| left.name.cmp(&right.name));
+    items
+}
+
+fn json_object_string_field<'a>(
+    item: &'a serde_json::Map<String, serde_json::Value>,
+    name: &str,
+) -> Option<&'a str> {
+    item.get(name).and_then(serde_json::Value::as_str)
+}
+
+fn json_object_command_field(
+    item: &serde_json::Map<String, serde_json::Value>,
+    name: &str,
+) -> Option<String> {
+    let value = item.get(name)?;
+    if value.is_null() {
+        return Some(String::new());
+    }
+    if let Some(value) = value.as_str() {
+        return Some(value.to_string());
+    }
+    value.as_array().map(|items| {
+        items
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .collect::<Vec<_>>()
+            .join(" ")
+    })
+}
+
+fn sh_quote_local(value: &str) -> String {
+    if value.is_empty() {
+        return "''".to_string();
+    }
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
 pub fn parse_compose_services_output(
@@ -387,28 +625,20 @@ mod tests {
             "DOCKER_AVAILABLE\t1\n",
             "DOCKER_VERSION\t26.1.0\n",
             "CONTAINER\tabc123\tweb\tnginx:latest\tUp 2 minutes\trunning\t0.0.0.0:80->80/tcp\t2026-01-01 00:00:00 +0000 UTC\t0B\n",
-            "CONTAINER_STATS\tabc123\t1.25%\t10MiB / 1GiB\t0.98%\t1kB / 2kB\t0B / 0B\t3\n",
-            "IMAGE\tsha256:fff\tnginx\tlatest\t70MB\t2 days ago\n",
-            "VOLUME\tlocal\tdata\n",
-            "NETWORK\tdef456\tbridge\tbridge\tlocal\n",
             "COMPOSE_AVAILABLE\t1\n",
-            "COMPOSE_JSON_BEGIN\n",
-            "[{\"Name\":\"demo\",\"Status\":\"running(1)\",\"ConfigFiles\":\"/srv/demo/compose.yaml\"}]\n",
-            "COMPOSE_JSON_END\n",
         );
 
         let overview = parse_docker_overview_output(raw);
 
         assert!(overview.available);
         assert_eq!(overview.version, "26.1.0");
-        assert_eq!(
-            overview.containers[0].stats.as_ref().unwrap().cpu_percent,
-            1.25
-        );
-        assert_eq!(overview.images[0].repository, "nginx");
-        assert_eq!(overview.volumes[0].name, "data");
-        assert_eq!(overview.networks[0].name, "bridge");
-        assert_eq!(overview.compose_projects[0].name, "demo");
+        assert!(overview.compose_available);
+        assert_eq!(overview.containers[0].name, "web");
+        assert!(overview.containers[0].stats.is_none());
+        assert!(overview.images.is_empty());
+        assert!(overview.volumes.is_empty());
+        assert!(overview.networks.is_empty());
+        assert!(overview.compose_projects.is_empty());
     }
 
     #[test]
@@ -416,6 +646,59 @@ mod tests {
         let overview = parse_docker_overview_output("DOCKER_AVAILABLE\t0\n");
         assert!(!overview.available);
         assert!(overview.containers.is_empty());
+    }
+
+    #[test]
+    fn parses_docker_resource_rows() {
+        let images =
+            parse_docker_images_output("IMAGE\tsha256:fff\tnginx\tlatest\t70MB\t2 days ago\n");
+        let volumes = parse_docker_volumes_output("VOLUME\tlocal\tdata\n");
+        let networks = parse_docker_networks_output("NETWORK\tdef456\tbridge\tbridge\tlocal\n");
+        let compose_projects = parse_compose_projects(
+            r#"[{"Name":"demo","Status":"running(1)","ConfigFiles":"/srv/demo/compose.yaml"}]"#,
+        );
+
+        assert_eq!(images[0].repository, "nginx");
+        assert_eq!(volumes[0].name, "data");
+        assert_eq!(networks[0].name, "bridge");
+        assert_eq!(compose_projects[0].name, "demo");
+    }
+
+    #[test]
+    fn parses_container_details_with_stats() {
+        let raw = concat!(
+            "INSPECT_JSON_BEGIN\n",
+            r#"[{"State":{"StartedAt":"2026-01-01T00:00:00Z","FinishedAt":"0001-01-01T00:00:00Z"},"RestartCount":2,"Config":{"Entrypoint":["/entry"],"Cmd":["run","server"]},"Mounts":[{"Type":"bind","Source":"/host","Destination":"/app","Mode":"ro","RW":false}],"NetworkSettings":{"Networks":{"bridge":{"IPAddress":"172.17.0.2"}}}}]"#,
+            "\nINSPECT_JSON_END\n",
+            "CONTAINER_STATS_BEGIN\n",
+            "CONTAINER_STATS\tabc123\t1.25%\t10MiB / 1GiB\t0.98%\t1kB / 2kB\t0B / 0B\t3\n",
+            "CONTAINER_STATS_END\n",
+        );
+
+        let details = parse_docker_container_details_output(raw);
+
+        assert_eq!(details.restart_count, 2);
+        assert_eq!(details.entrypoint, "/entry");
+        assert_eq!(details.command, "run server");
+        assert_eq!(details.mounts[0].destination, "/app");
+        assert_eq!(details.networks[0].name, "bridge");
+        assert_eq!(details.stats.unwrap().cpu_percent, 1.25);
+    }
+
+    #[test]
+    fn keeps_container_details_when_stats_are_missing() {
+        let raw = concat!(
+            "INSPECT_JSON_BEGIN\n",
+            r#"[{"State":{"StartedAt":"2026-01-01T00:00:00Z","FinishedAt":""},"RestartCount":0,"Config":{"Entrypoint":null,"Cmd":null},"Mounts":[],"NetworkSettings":{"Networks":{}}}]"#,
+            "\nINSPECT_JSON_END\n",
+            "CONTAINER_STATS_BEGIN\n",
+            "CONTAINER_STATS_END\n",
+        );
+
+        let details = parse_docker_container_details_output(raw);
+
+        assert_eq!(details.started_at, "2026-01-01T00:00:00Z");
+        assert!(details.stats.is_none());
     }
 
     #[test]

@@ -1,7 +1,12 @@
 use crate::core::SessionManager;
 use crate::core::docker::{
-    DOCKER_OVERVIEW_SCRIPT, DockerComposeService, RemoteDockerOverview,
-    parse_compose_services_output, parse_docker_overview_output,
+    DOCKER_COMPOSE_PROJECTS_SCRIPT, DOCKER_IMAGES_SCRIPT, DOCKER_NETWORKS_SCRIPT,
+    DOCKER_OVERVIEW_SCRIPT, DOCKER_VOLUMES_SCRIPT, DockerComposeProject, DockerComposeService,
+    DockerContainerDetails, DockerContainerStats, DockerImage, DockerNetwork, DockerVolume,
+    RemoteDockerOverview, docker_container_details_script, parse_compose_projects,
+    parse_compose_services_output, parse_docker_container_details_output,
+    parse_docker_images_output, parse_docker_networks_output, parse_docker_overview_output,
+    parse_docker_stats_output, parse_docker_volumes_output,
 };
 use crate::core::remote_exec::{
     RemoteCommandOutput, ensure_success, exec_ssh_session_command, sh_quote,
@@ -29,6 +34,115 @@ pub async fn get_remote_docker_overview(
     .await?;
 
     Ok(parse_docker_overview_output(&output.stdout))
+}
+
+#[tauri::command]
+pub async fn get_remote_docker_images(
+    state: tauri::State<'_, Arc<SessionManager>>,
+    session_id: String,
+) -> AppResult<Vec<DockerImage>> {
+    let output = exec_ssh_session_command(
+        state.inner(),
+        &session_id,
+        DOCKER_IMAGES_SCRIPT.as_bytes(),
+        DOCKER_TIMEOUT,
+    )
+    .await?;
+    let output = ensure_success(output, "Docker images failed")?;
+
+    Ok(parse_docker_images_output(&output.stdout))
+}
+
+#[tauri::command]
+pub async fn get_remote_docker_volumes(
+    state: tauri::State<'_, Arc<SessionManager>>,
+    session_id: String,
+) -> AppResult<Vec<DockerVolume>> {
+    let output = exec_ssh_session_command(
+        state.inner(),
+        &session_id,
+        DOCKER_VOLUMES_SCRIPT.as_bytes(),
+        DOCKER_TIMEOUT,
+    )
+    .await?;
+    let output = ensure_success(output, "Docker volumes failed")?;
+
+    Ok(parse_docker_volumes_output(&output.stdout))
+}
+
+#[tauri::command]
+pub async fn get_remote_docker_networks(
+    state: tauri::State<'_, Arc<SessionManager>>,
+    session_id: String,
+) -> AppResult<Vec<DockerNetwork>> {
+    let output = exec_ssh_session_command(
+        state.inner(),
+        &session_id,
+        DOCKER_NETWORKS_SCRIPT.as_bytes(),
+        DOCKER_TIMEOUT,
+    )
+    .await?;
+    let output = ensure_success(output, "Docker networks failed")?;
+
+    Ok(parse_docker_networks_output(&output.stdout))
+}
+
+#[tauri::command]
+pub async fn get_remote_docker_compose_projects(
+    state: tauri::State<'_, Arc<SessionManager>>,
+    session_id: String,
+) -> AppResult<Vec<DockerComposeProject>> {
+    let output = exec_ssh_session_command(
+        state.inner(),
+        &session_id,
+        DOCKER_COMPOSE_PROJECTS_SCRIPT.as_bytes(),
+        DOCKER_TIMEOUT,
+    )
+    .await?;
+    let output = ensure_success(output, "Docker compose projects failed")?;
+
+    Ok(parse_compose_projects(&output.stdout))
+}
+
+#[tauri::command]
+pub async fn get_docker_container_details(
+    state: tauri::State<'_, Arc<SessionManager>>,
+    session_id: String,
+    container_id: String,
+) -> AppResult<DockerContainerDetails> {
+    let command = docker_container_details_script(&container_id);
+    let output = exec_ssh_session_command(
+        state.inner(),
+        &session_id,
+        command.as_bytes(),
+        DOCKER_TIMEOUT,
+    )
+    .await?;
+    let output = ensure_success(output, "Docker container details failed")?;
+
+    Ok(parse_docker_container_details_output(&output.stdout))
+}
+
+#[tauri::command]
+pub async fn get_docker_container_stats(
+    state: tauri::State<'_, Arc<SessionManager>>,
+    session_id: String,
+    container_id: String,
+) -> AppResult<Option<DockerContainerStats>> {
+    let command = format!(
+        "docker stats --no-stream --no-trunc --format \"CONTAINER_STATS\\t{{{{.ID}}}}\\t{{{{.CPUPerc}}}}\\t{{{{.MemUsage}}}}\\t{{{{.MemPerc}}}}\\t{{{{.NetIO}}}}\\t{{{{.BlockIO}}}}\\t{{{{.PIDs}}}}\" {}",
+        sh_quote(&container_id)
+    );
+    let output = exec_ssh_session_command(
+        state.inner(),
+        &session_id,
+        command.as_bytes(),
+        DOCKER_TIMEOUT,
+    )
+    .await?;
+    let output = ensure_success(output, "Docker container stats failed")?;
+
+    Ok(parse_docker_stats_output(&output.stdout).into_iter().next())
 }
 
 #[tauri::command]

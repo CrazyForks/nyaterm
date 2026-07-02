@@ -467,6 +467,30 @@ export interface DockerContainer {
   stats?: DockerContainerStats | null;
 }
 
+export interface DockerContainerMount {
+  kind: string;
+  source: string;
+  destination: string;
+  mode: string;
+  rw: boolean;
+}
+
+export interface DockerContainerNetwork {
+  name: string;
+  ip_address: string;
+}
+
+export interface DockerContainerDetails {
+  stats?: DockerContainerStats | null;
+  started_at: string;
+  finished_at: string;
+  restart_count: number;
+  entrypoint: string;
+  command: string;
+  mounts: DockerContainerMount[];
+  networks: DockerContainerNetwork[];
+}
+
 export interface DockerImage {
   id: string;
   repository: string;

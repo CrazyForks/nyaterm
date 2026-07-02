@@ -40,13 +40,17 @@ import type {
   DockerComposeProject,
   DockerComposeService,
   DockerContainer,
+  DockerImage,
+  DockerNetwork,
+  DockerVolume,
   RemoteDockerOverview,
 } from "@/types/global";
 
 type DockerTab = "containers" | "images" | "volumes" | "networks" | "compose";
+type DockerResourceTab = Exclude<DockerTab, "containers">;
 
 const MAX_CONSECUTIVE_FAILURES = 3;
-const CONTAINER_ROW_HEIGHT = 82;
+const CONTAINER_ROW_HEIGHT = 66;
 const SIMPLE_ROW_HEIGHT = 64;
 const COMPOSE_ROW_HEIGHT = 74;
 const COMPOSE_SERVICE_ROW_HEIGHT = 58;
@@ -76,7 +80,7 @@ interface DockerManagerProps {
 interface DockerTabItem {
   value: DockerTab;
   label: string;
-  count: number;
+  count: number | null;
 }
 
 interface ComposeServicesState {
@@ -95,6 +99,9 @@ export default function DockerManager({ activeSessionId }: DockerManagerProps) {
   const [selectedContainer, setSelectedContainer] = useState<DockerContainer | null>(null);
   const [pendingAction, setPendingAction] = useState<DockerPendingAction | null>(null);
   const [isManualRefreshing, setIsManualRefreshing] = useState(false);
+  const [loadedTabs, setLoadedTabs] = useState<Set<DockerResourceTab>>(() => new Set());
+  const [loadingTabs, setLoadingTabs] = useState<Set<DockerResourceTab>>(() => new Set());
+  const [failedTabs, setFailedTabs] = useState<Set<DockerResourceTab>>(() => new Set());
   const [pendingOperations, setPendingOperations] = useState<Set<string>>(() => new Set());
   const [expandedComposeProjects, setExpandedComposeProjects] = useState<Set<string>>(
     () => new Set(),
@@ -116,8 +123,19 @@ export default function DockerManager({ activeSessionId }: DockerManagerProps) {
 
     try {
       const data = await invoke<RemoteDockerOverview>("get_remote_docker_overview", { sessionId });
-      setOverview(data);
-      if (manual) {
+      setOverview((current) => ({
+        ...data,
+        images: current?.images ?? [],
+        volumes: current?.volumes ?? [],
+        networks: current?.networks ?? [],
+        compose_projects: data.compose_available ? (current?.compose_projects ?? []) : [],
+      }));
+      if (!data.compose_available) {
+        setLoadedTabs((current) => {
+          const next = new Set(current);
+          next.delete("compose");
+          return next;
+        });
         setComposeServicesByProject({});
         setExpandedComposeProjects(new Set());
       }
@@ -135,10 +153,81 @@ export default function DockerManager({ activeSessionId }: DockerManagerProps) {
     }
   }, []);
 
+  const fetchResourceTab = useCallback(
+    async (sessionId: string, resourceTab: DockerResourceTab, manual = false) => {
+      if (loadingTabs.has(resourceTab)) return;
+
+      setLoadingTabs((current) => new Set(current).add(resourceTab));
+      try {
+        switch (resourceTab) {
+          case "images": {
+            const images = await invoke<DockerImage[]>("get_remote_docker_images", { sessionId });
+            setOverview((current) => (current ? { ...current, images } : current));
+            break;
+          }
+          case "volumes": {
+            const volumes = await invoke<DockerVolume[]>("get_remote_docker_volumes", {
+              sessionId,
+            });
+            setOverview((current) => (current ? { ...current, volumes } : current));
+            break;
+          }
+          case "networks": {
+            const networks = await invoke<DockerNetwork[]>("get_remote_docker_networks", {
+              sessionId,
+            });
+            setOverview((current) => (current ? { ...current, networks } : current));
+            break;
+          }
+          case "compose": {
+            const composeProjects = await invoke<DockerComposeProject[]>(
+              "get_remote_docker_compose_projects",
+              { sessionId },
+            );
+            setOverview((current) =>
+              current ? { ...current, compose_projects: composeProjects } : current,
+            );
+            break;
+          }
+        }
+        setLoadedTabs((current) => new Set(current).add(resourceTab));
+        setFailedTabs((current) => {
+          const next = new Set(current);
+          next.delete(resourceTab);
+          return next;
+        });
+      } catch (error) {
+        setFailedTabs((current) => new Set(current).add(resourceTab));
+        if (manual) toast.error(getErrorMessage(error));
+      } finally {
+        setLoadingTabs((current) => {
+          const next = new Set(current);
+          next.delete(resourceTab);
+          return next;
+        });
+      }
+    },
+    [loadingTabs],
+  );
+  const fetchResourceTabRef = useRef(fetchResourceTab);
+
+  useEffect(() => {
+    fetchResourceTabRef.current = fetchResourceTab;
+  }, [fetchResourceTab]);
+
+  const tabRef = useRef(tab);
+
+  useEffect(() => {
+    tabRef.current = tab;
+  }, [tab]);
+
   const refresh = useCallback(() => {
     if (!enabled || !activeSessionId) return;
     void fetchOverview(activeSessionId, true);
-  }, [activeSessionId, enabled, fetchOverview]);
+    if (isResourceTab(tab)) {
+      void fetchResourceTab(activeSessionId, tab, true);
+    }
+  }, [activeSessionId, enabled, fetchOverview, fetchResourceTab, tab]);
 
   useEffect(() => {
     if (pollRef.current) {
@@ -148,6 +237,9 @@ export default function DockerManager({ activeSessionId }: DockerManagerProps) {
 
     if (!enabled || !activeSessionId) {
       setOverview(null);
+      setLoadedTabs(new Set());
+      setLoadingTabs(new Set());
+      setFailedTabs(new Set());
       setComposeServicesByProject({});
       setExpandedComposeProjects(new Set());
       setError(false);
@@ -156,14 +248,31 @@ export default function DockerManager({ activeSessionId }: DockerManagerProps) {
     }
 
     fetchOverview(activeSessionId);
+    setLoadedTabs(new Set());
+    setLoadingTabs(new Set());
+    setFailedTabs(new Set());
     setComposeServicesByProject({});
     setExpandedComposeProjects(new Set());
-    pollRef.current = setInterval(() => fetchOverview(activeSessionId), pollIntervalMs);
+    pollRef.current = setInterval(() => {
+      void fetchOverview(activeSessionId);
+      const currentTab = tabRef.current;
+      if (isResourceTab(currentTab)) {
+        void fetchResourceTabRef.current(activeSessionId, currentTab);
+      }
+    }, pollIntervalMs);
 
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
     };
   }, [enabled, activeSessionId, pollIntervalMs, fetchOverview]);
+
+  useEffect(() => {
+    if (!enabled || !activeSessionId || !overview?.available || !isResourceTab(tab)) return;
+    if (tab === "compose" && !overview.compose_available) return;
+    if (!loadedTabs.has(tab) && !loadingTabs.has(tab)) {
+      void fetchResourceTab(activeSessionId, tab);
+    }
+  }, [activeSessionId, enabled, fetchResourceTab, loadedTabs, loadingTabs, overview, tab]);
 
   useEffect(() => {
     if (tab === "compose" && overview && !overview.compose_available) {
@@ -185,25 +294,38 @@ export default function DockerManager({ activeSessionId }: DockerManagerProps) {
         label: t("dockerManager.containers"),
         count: overview.containers.length,
       },
-      { value: "images", label: t("dockerManager.images"), count: overview.images.length },
-      { value: "volumes", label: t("dockerManager.volumes"), count: overview.volumes.length },
-      { value: "networks", label: t("dockerManager.networks"), count: overview.networks.length },
+      {
+        value: "images",
+        label: t("dockerManager.images"),
+        count: loadedTabs.has("images") ? overview.images.length : null,
+      },
+      {
+        value: "volumes",
+        label: t("dockerManager.volumes"),
+        count: loadedTabs.has("volumes") ? overview.volumes.length : null,
+      },
+      {
+        value: "networks",
+        label: t("dockerManager.networks"),
+        count: loadedTabs.has("networks") ? overview.networks.length : null,
+      },
     ];
     if (overview.compose_available) {
       items.push({
         value: "compose",
         label: t("dockerManager.compose"),
-        count: overview.compose_projects.length,
+        count: loadedTabs.has("compose") ? overview.compose_projects.length : null,
       });
     }
     return items;
-  }, [overview, t]);
+  }, [loadedTabs, overview, t]);
 
   const runOperation = useCallback(
     async (
       operationKey: string,
       operation: () => Promise<unknown>,
       successKey = "dockerManager.actionSuccess",
+      refreshAfterSuccess?: () => void | Promise<void>,
     ) => {
       if (!activeSessionId) return;
       if (pendingOperations.has(operationKey)) return;
@@ -213,7 +335,11 @@ export default function DockerManager({ activeSessionId }: DockerManagerProps) {
       try {
         await operation();
         toast.success(t(successKey), { id: toastId });
-        void fetchOverview(activeSessionId, true);
+        if (refreshAfterSuccess) {
+          await refreshAfterSuccess();
+        } else {
+          await fetchOverview(activeSessionId, true);
+        }
       } catch (error) {
         toast.error(getErrorMessage(error), { id: toastId });
       } finally {
@@ -336,8 +462,14 @@ export default function DockerManager({ activeSessionId }: DockerManagerProps) {
             serviceName: service.name,
             action,
           }),
+        "dockerManager.actionSuccess",
+        async () => {
+          if (!activeSessionId) return;
+          await fetchResourceTab(activeSessionId, "compose", true);
+          await loadComposeServices(project);
+        },
       ),
-    [activeSessionId, runOperation],
+    [activeSessionId, fetchResourceTab, loadComposeServices, runOperation],
   );
 
   const sendComposeServiceLogs = useCallback(
@@ -442,7 +574,7 @@ export default function DockerManager({ activeSessionId }: DockerManagerProps) {
         ) : overview ? (
           <div className="flex h-full min-h-0 flex-col space-y-2.5">
             <OverviewStrip
-              imageCount={summary.images}
+              imageCount={loadedTabs.has("images") ? summary.images : null}
               runningCount={summary.running}
               stoppedCount={summary.stopped}
             />
@@ -500,182 +632,244 @@ export default function DockerManager({ activeSessionId }: DockerManagerProps) {
               </TabsContent>
 
               <TabsContent value="images" className="mt-2 min-h-0">
-                <VirtualListPane
-                  items={filtered.images}
-                  rowHeight={SIMPLE_ROW_HEIGHT}
-                  renderRow={(image) => (
-                    <DockerObjectRow
-                      key={image.id}
-                      title={`${image.repository}:${image.tag}`}
-                      meta={image.created_since}
-                      detail={image.size}
-                      identifier={shortId(image.id)}
-                      pending={pendingOperations.has(
-                        dockerOperationKey("image", image.id, "remove"),
-                      )}
-                      onRemove={() =>
-                        confirmDanger({
-                          title: t("dockerManager.removeImage"),
-                          description: t("dockerManager.confirmActionDesc", {
-                            action: "remove",
-                            target: `${image.repository}:${image.tag}`,
-                          }),
-                          command: `docker image rm ${image.id}`,
-                          run: () =>
-                            runOperation(dockerOperationKey("image", image.id, "remove"), () =>
-                              invoke("docker_image_remove", {
-                                sessionId: activeSessionId,
-                                imageId: image.id,
-                                force: false,
-                              }),
-                            ),
-                        })
-                      }
-                    />
-                  )}
-                />
+                <ResourceTabState
+                  failed={failedTabs.has("images")}
+                  loaded={loadedTabs.has("images")}
+                  loading={loadingTabs.has("images")}
+                  onRetry={() =>
+                    activeSessionId && void fetchResourceTab(activeSessionId, "images", true)
+                  }
+                >
+                  <VirtualListPane
+                    items={filtered.images}
+                    rowHeight={SIMPLE_ROW_HEIGHT}
+                    renderRow={(image) => (
+                      <DockerObjectRow
+                        key={image.id}
+                        title={`${image.repository}:${image.tag}`}
+                        meta={image.created_since}
+                        detail={image.size}
+                        identifier={shortId(image.id)}
+                        pending={pendingOperations.has(
+                          dockerOperationKey("image", image.id, "remove"),
+                        )}
+                        onRemove={() =>
+                          confirmDanger({
+                            title: t("dockerManager.removeImage"),
+                            description: t("dockerManager.confirmActionDesc", {
+                              action: "remove",
+                              target: `${image.repository}:${image.tag}`,
+                            }),
+                            command: `docker image rm ${image.id}`,
+                            run: () =>
+                              runOperation(
+                                dockerOperationKey("image", image.id, "remove"),
+                                () =>
+                                  invoke("docker_image_remove", {
+                                    sessionId: activeSessionId,
+                                    imageId: image.id,
+                                    force: false,
+                                  }),
+                                "dockerManager.actionSuccess",
+                                () =>
+                                  activeSessionId
+                                    ? fetchResourceTab(activeSessionId, "images", true)
+                                    : undefined,
+                              ),
+                          })
+                        }
+                      />
+                    )}
+                  />
+                </ResourceTabState>
               </TabsContent>
 
               <TabsContent value="volumes" className="mt-2 min-h-0">
-                <VirtualListPane
-                  items={filtered.volumes}
-                  rowHeight={SIMPLE_ROW_HEIGHT}
-                  renderRow={(volume) => (
-                    <DockerObjectRow
-                      key={volume.name}
-                      title={volume.name}
-                      meta={t("dockerManager.volumeDriver", { driver: volume.driver })}
-                      detail={t("dockerManager.volume")}
-                      pending={pendingOperations.has(
-                        dockerOperationKey("volume", volume.name, "remove"),
-                      )}
-                      onRemove={() =>
-                        confirmDanger({
-                          title: t("dockerManager.removeVolume"),
-                          description: t("dockerManager.confirmActionDesc", {
-                            action: "remove",
-                            target: volume.name,
-                          }),
-                          command: `docker volume rm ${volume.name}`,
-                          run: () =>
-                            runOperation(dockerOperationKey("volume", volume.name, "remove"), () =>
-                              invoke("docker_volume_remove", {
-                                sessionId: activeSessionId,
-                                volumeName: volume.name,
-                                force: false,
-                              }),
-                            ),
-                        })
-                      }
-                    />
-                  )}
-                />
+                <ResourceTabState
+                  failed={failedTabs.has("volumes")}
+                  loaded={loadedTabs.has("volumes")}
+                  loading={loadingTabs.has("volumes")}
+                  onRetry={() =>
+                    activeSessionId && void fetchResourceTab(activeSessionId, "volumes", true)
+                  }
+                >
+                  <VirtualListPane
+                    items={filtered.volumes}
+                    rowHeight={SIMPLE_ROW_HEIGHT}
+                    renderRow={(volume) => (
+                      <DockerObjectRow
+                        key={volume.name}
+                        title={volume.name}
+                        meta={t("dockerManager.volumeDriver", { driver: volume.driver })}
+                        detail={t("dockerManager.volume")}
+                        pending={pendingOperations.has(
+                          dockerOperationKey("volume", volume.name, "remove"),
+                        )}
+                        onRemove={() =>
+                          confirmDanger({
+                            title: t("dockerManager.removeVolume"),
+                            description: t("dockerManager.confirmActionDesc", {
+                              action: "remove",
+                              target: volume.name,
+                            }),
+                            command: `docker volume rm ${volume.name}`,
+                            run: () =>
+                              runOperation(
+                                dockerOperationKey("volume", volume.name, "remove"),
+                                () =>
+                                  invoke("docker_volume_remove", {
+                                    sessionId: activeSessionId,
+                                    volumeName: volume.name,
+                                    force: false,
+                                  }),
+                                "dockerManager.actionSuccess",
+                                () =>
+                                  activeSessionId
+                                    ? fetchResourceTab(activeSessionId, "volumes", true)
+                                    : undefined,
+                              ),
+                          })
+                        }
+                      />
+                    )}
+                  />
+                </ResourceTabState>
               </TabsContent>
 
               <TabsContent value="networks" className="mt-2 min-h-0">
-                <VirtualListPane
-                  items={filtered.networks}
-                  rowHeight={SIMPLE_ROW_HEIGHT}
-                  renderRow={(network) => (
-                    <DockerObjectRow
-                      key={network.id}
-                      title={network.name}
-                      meta={`${network.driver} · ${network.scope}`}
-                      detail={t("dockerManager.network")}
-                      identifier={shortId(network.id)}
-                      pending={pendingOperations.has(
-                        dockerOperationKey("network", network.id, "remove"),
-                      )}
-                      onRemove={() =>
-                        confirmDanger({
-                          title: t("dockerManager.removeNetwork"),
-                          description: t("dockerManager.confirmActionDesc", {
-                            action: "remove",
-                            target: network.name,
-                          }),
-                          command: `docker network rm ${network.id}`,
-                          run: () =>
-                            runOperation(dockerOperationKey("network", network.id, "remove"), () =>
-                              invoke("docker_network_remove", {
-                                sessionId: activeSessionId,
-                                networkId: network.id,
-                              }),
-                            ),
-                        })
-                      }
-                    />
-                  )}
-                />
+                <ResourceTabState
+                  failed={failedTabs.has("networks")}
+                  loaded={loadedTabs.has("networks")}
+                  loading={loadingTabs.has("networks")}
+                  onRetry={() =>
+                    activeSessionId && void fetchResourceTab(activeSessionId, "networks", true)
+                  }
+                >
+                  <VirtualListPane
+                    items={filtered.networks}
+                    rowHeight={SIMPLE_ROW_HEIGHT}
+                    renderRow={(network) => (
+                      <DockerObjectRow
+                        key={network.id}
+                        title={network.name}
+                        meta={`${network.driver} · ${network.scope}`}
+                        detail={t("dockerManager.network")}
+                        identifier={shortId(network.id)}
+                        pending={pendingOperations.has(
+                          dockerOperationKey("network", network.id, "remove"),
+                        )}
+                        onRemove={() =>
+                          confirmDanger({
+                            title: t("dockerManager.removeNetwork"),
+                            description: t("dockerManager.confirmActionDesc", {
+                              action: "remove",
+                              target: network.name,
+                            }),
+                            command: `docker network rm ${network.id}`,
+                            run: () =>
+                              runOperation(
+                                dockerOperationKey("network", network.id, "remove"),
+                                () =>
+                                  invoke("docker_network_remove", {
+                                    sessionId: activeSessionId,
+                                    networkId: network.id,
+                                  }),
+                                "dockerManager.actionSuccess",
+                                () =>
+                                  activeSessionId
+                                    ? fetchResourceTab(activeSessionId, "networks", true)
+                                    : undefined,
+                              ),
+                          })
+                        }
+                      />
+                    )}
+                  />
+                </ResourceTabState>
               </TabsContent>
 
               {overview.compose_available ? (
                 <TabsContent value="compose" className="mt-2 min-h-0">
-                  <VirtualListPane
-                    items={filtered.compose_projects}
-                    rowHeight={COMPOSE_ROW_HEIGHT}
-                    getRowHeight={(project) =>
-                      getComposeProjectRowHeight(
-                        project,
-                        expandedComposeProjects,
-                        composeServicesByProject,
-                      )
+                  <ResourceTabState
+                    failed={failedTabs.has("compose")}
+                    loaded={loadedTabs.has("compose")}
+                    loading={loadingTabs.has("compose")}
+                    onRetry={() =>
+                      activeSessionId && void fetchResourceTab(activeSessionId, "compose", true)
                     }
-                    renderRow={(project) => (
-                      <ComposeRow
-                        key={project.name}
-                        project={project}
-                        expanded={expandedComposeProjects.has(composeProjectKey(project))}
-                        pendingAction={getPendingOperationAction(
-                          pendingOperations,
-                          dockerOperationKey("compose", composeProjectKey(project)),
-                        )}
-                        servicesState={composeServicesByProject[composeProjectKey(project)]}
-                        getServicePendingAction={(service) =>
-                          getPendingOperationAction(
+                  >
+                    <VirtualListPane
+                      items={filtered.compose_projects}
+                      rowHeight={COMPOSE_ROW_HEIGHT}
+                      getRowHeight={(project) =>
+                        getComposeProjectRowHeight(
+                          project,
+                          expandedComposeProjects,
+                          composeServicesByProject,
+                        )
+                      }
+                      renderRow={(project) => (
+                        <ComposeRow
+                          key={project.name}
+                          project={project}
+                          expanded={expandedComposeProjects.has(composeProjectKey(project))}
+                          pendingAction={getPendingOperationAction(
                             pendingOperations,
-                            dockerOperationKey(
-                              "compose-service",
-                              composeProjectKey(project),
-                              service.name,
-                            ),
-                          )
-                        }
-                        onToggle={() => toggleComposeProject(project)}
-                        onEnterService={enterComposeService}
-                        onLogsService={(service) => void sendComposeServiceLogs(project, service)}
-                        onRetryServices={() => void loadComposeServices(project)}
-                        onServiceAction={(service, action) =>
-                          void invokeComposeServiceAction(project, service, action)
-                        }
-                        onAction={(action) => {
-                          const run = () =>
-                            runOperation(
-                              dockerOperationKey("compose", composeProjectKey(project), action),
-                              () =>
-                                invoke("docker_compose_action", {
-                                  sessionId: activeSessionId,
-                                  projectName: project.name,
-                                  configFiles: project.config_files,
-                                  action,
-                                }),
-                            );
-                          if (action === "down") {
-                            confirmDanger({
-                              title: t("dockerManager.composeDown"),
-                              description: t("dockerManager.confirmActionDesc", {
-                                action,
-                                target: project.name,
-                              }),
-                              command: `docker compose -p ${project.name} down`,
-                              run,
-                            });
-                          } else {
-                            void run();
+                            dockerOperationKey("compose", composeProjectKey(project)),
+                          )}
+                          servicesState={composeServicesByProject[composeProjectKey(project)]}
+                          getServicePendingAction={(service) =>
+                            getPendingOperationAction(
+                              pendingOperations,
+                              dockerOperationKey(
+                                "compose-service",
+                                composeProjectKey(project),
+                                service.name,
+                              ),
+                            )
                           }
-                        }}
-                      />
-                    )}
-                  />
+                          onToggle={() => toggleComposeProject(project)}
+                          onEnterService={enterComposeService}
+                          onLogsService={(service) => void sendComposeServiceLogs(project, service)}
+                          onRetryServices={() => void loadComposeServices(project)}
+                          onServiceAction={(service, action) =>
+                            void invokeComposeServiceAction(project, service, action)
+                          }
+                          onAction={(action) => {
+                            const run = () =>
+                              runOperation(
+                                dockerOperationKey("compose", composeProjectKey(project), action),
+                                () =>
+                                  invoke("docker_compose_action", {
+                                    sessionId: activeSessionId,
+                                    projectName: project.name,
+                                    configFiles: project.config_files,
+                                    action,
+                                  }),
+                                "dockerManager.actionSuccess",
+                                () =>
+                                  activeSessionId
+                                    ? fetchResourceTab(activeSessionId, "compose", true)
+                                    : undefined,
+                              );
+                            if (action === "down") {
+                              confirmDanger({
+                                title: t("dockerManager.composeDown"),
+                                description: t("dockerManager.confirmActionDesc", {
+                                  action,
+                                  target: project.name,
+                                }),
+                                command: `docker compose -p ${project.name} down`,
+                                run,
+                              });
+                            } else {
+                              void run();
+                            }
+                          }}
+                        />
+                      )}
+                    />
+                  </ResourceTabState>
                 </TabsContent>
               ) : null}
             </Tabs>
@@ -687,6 +881,8 @@ export default function DockerManager({ activeSessionId }: DockerManagerProps) {
 
       <DockerContainerDetailsDialog
         container={selectedContainer}
+        pollIntervalMs={pollIntervalMs}
+        sessionId={activeSessionId}
         onOpenChange={(open) => !open && setSelectedContainer(null)}
       />
       <DockerConfirmDialog
@@ -728,6 +924,10 @@ function filterOverview(
       matches(item.name, item.status, item.config_files),
     ),
   };
+}
+
+function isResourceTab(tab: DockerTab): tab is DockerResourceTab {
+  return tab !== "containers";
 }
 
 function dockerOperationKey(...parts: string[]) {
@@ -809,9 +1009,6 @@ function sortContainers(containers: DockerContainer[]) {
     const stateDelta = getDockerStateRank(left) - getDockerStateRank(right);
     if (stateDelta !== 0) return stateDelta;
 
-    const cpuDelta = (right.stats?.cpu_percent ?? 0) - (left.stats?.cpu_percent ?? 0);
-    if (cpuDelta !== 0) return cpuDelta;
-
     return left.name.localeCompare(right.name);
   });
 }
@@ -858,10 +1055,6 @@ function getDockerStateLabelKey(state: string) {
   return "unknown";
 }
 
-function formatMemoryUsed(memoryUsage: string) {
-  return memoryUsage.split("/")[0]?.trim() || "-";
-}
-
 function stateAccentClass(kind: DockerStateKind) {
   switch (kind) {
     case "danger":
@@ -897,7 +1090,7 @@ function OverviewStrip({
   runningCount,
   stoppedCount,
 }: {
-  imageCount: number;
+  imageCount: number | null;
   runningCount: number;
   stoppedCount: number;
 }) {
@@ -906,7 +1099,7 @@ function OverviewStrip({
     <div className="flex h-8 items-center justify-between gap-1 rounded-md border bg-muted/20 px-2">
       <OverviewStat label={t("dockerManager.running")} tone="running" value={runningCount} />
       <OverviewStat label={t("dockerManager.stopped")} tone="stopped" value={stoppedCount} />
-      <OverviewStat label={t("dockerManager.images")} value={imageCount} />
+      <OverviewStat label={t("dockerManager.images")} value={imageCount ?? "-"} />
     </div>
   );
 }
@@ -1001,7 +1194,7 @@ function AdaptiveDockerTabsList({
         <TabsTrigger key={item.value} value={item.value} className="min-w-0 px-2 text-[0.6875rem]">
           <span className="min-w-0 truncate">{item.label}</span>
           <span className="shrink-0 font-mono text-[0.625rem] text-muted-foreground">
-            {item.count}
+            {item.count ?? "-"}
           </span>
         </TabsTrigger>
       ))}
@@ -1046,7 +1239,7 @@ function AdaptiveDockerTabsList({
             className="inline-flex h-6 items-center justify-center gap-1.5 whitespace-nowrap px-2 text-[0.6875rem] font-medium"
           >
             <span>{item.label}</span>
-            <span className="font-mono text-[0.625rem]">{item.count}</span>
+            <span className="font-mono text-[0.625rem]">{item.count ?? "-"}</span>
           </div>
         ))}
         <Button
@@ -1069,14 +1262,14 @@ function DockerTabMenuItem({
   label,
   onSelect,
 }: {
-  count: number;
+  count: number | null;
   label: string;
   onSelect: () => void;
 }) {
   return (
     <DropdownMenuItem className="justify-between gap-4" onSelect={onSelect}>
       <span>{label}</span>
-      <span className="font-mono text-[0.625rem] text-muted-foreground">{count}</span>
+      <span className="font-mono text-[0.625rem] text-muted-foreground">{count ?? "-"}</span>
     </DropdownMenuItem>
   );
 }
@@ -1094,6 +1287,39 @@ function StateBadge({ state }: { state: string }) {
       {t(`dockerManager.stateLabels.${labelKey}`)}
     </Badge>
   );
+}
+
+function ResourceTabState({
+  children,
+  failed,
+  loaded,
+  loading,
+  onRetry,
+}: {
+  children: ReactNode;
+  failed: boolean;
+  loaded: boolean;
+  loading: boolean;
+  onRetry: () => void;
+}) {
+  const { t } = useTranslation();
+
+  if (loading && !loaded) {
+    return <LoadingSpinner label={t("common.loading")} />;
+  }
+
+  if (failed && !loaded) {
+    return (
+      <div className="flex h-full min-h-0 flex-col items-center justify-center gap-2 rounded-md border border-dashed p-4 text-center">
+        <span className="text-sm text-muted-foreground">{t("dockerManager.error")}</span>
+        <Button variant="ghost" size="xs" onClick={onRetry}>
+          {t("common.retry")}
+        </Button>
+      </div>
+    );
+  }
+
+  return <>{children}</>;
 }
 
 function VirtualListPane<T>({
@@ -1154,7 +1380,6 @@ function ContainerRow({
 }) {
   const stateKind = getDockerStateKind(container.state);
   const running = stateKind === "running";
-  const stats = container.stats;
   const pending = Boolean(pendingAction);
   return (
     <div
@@ -1185,7 +1410,6 @@ function ContainerRow({
           </span>
           <span className="shrink-0">{shortId(container.id)}</span>
         </div>
-        <MetricLine stats={stats} />
       </div>
       <div className="absolute top-2 right-2 z-20">
         <DockerActionMenu
@@ -1513,56 +1737,6 @@ function ComposeServiceRow({
         </DropdownMenuContent>
       </DropdownMenu>
     </div>
-  );
-}
-
-function MetricLine({ stats }: { stats: DockerContainer["stats"] }) {
-  const cpuTone =
-    stats && stats.cpu_percent >= 50
-      ? "hot"
-      : stats && stats.cpu_percent > 0
-        ? "active"
-        : undefined;
-  const memoryTone = stats && stats.memory_percent >= 70 ? "hot" : undefined;
-
-  return (
-    <div className="flex min-w-0 items-baseline gap-3 font-mono text-[0.6875rem] leading-4">
-      <MetricInline
-        label="CPU"
-        tone={cpuTone}
-        value={`${stats?.cpu_percent.toFixed(1) ?? "0.0"}%`}
-      />
-      <MetricInline
-        label="MEM"
-        tone={memoryTone}
-        value={stats ? formatMemoryUsed(stats.memory_usage) : "-"}
-      />
-    </div>
-  );
-}
-
-function MetricInline({
-  label,
-  tone,
-  value,
-}: {
-  label: string;
-  tone?: "active" | "hot";
-  value: string;
-}) {
-  return (
-    <span className="flex min-w-0 items-baseline gap-1">
-      <span className="shrink-0 text-[0.625rem] text-muted-foreground">{label}</span>
-      <span
-        className={cn(
-          "min-w-0 whitespace-nowrap font-medium",
-          tone === "hot" ? "text-red-300" : tone === "active" ? "text-sky-300" : "text-foreground",
-        )}
-        title={value}
-      >
-        {value}
-      </span>
-    </span>
   );
 }
 
