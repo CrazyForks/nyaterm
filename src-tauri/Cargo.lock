@@ -4040,6 +4040,7 @@ dependencies = [
  "open",
  "opendal",
  "portable-pty",
+ "quick-xml 0.40.1",
  "rand 0.8.5",
  "redb",
  "regex",
