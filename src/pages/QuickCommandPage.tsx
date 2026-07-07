@@ -132,8 +132,8 @@ export default function QuickCommandPage() {
         onClose={handleClose}
       />
 
-      <div className="terminal-scroll flex-1 min-h-0 space-y-5 overflow-y-auto p-4 sm:p-5">
-        <div className="flex flex-col gap-4 md:flex-row">
+      <div className="terminal-scroll flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto p-4 sm:p-5">
+        <div className="flex shrink-0 flex-col gap-4 md:flex-row">
           <div className="min-w-0 flex-1 space-y-1.5">
             <div className="flex justify-between items-center">
               <Label htmlFor="qc-label" className="text-xs text-muted-foreground">
@@ -247,7 +247,7 @@ export default function QuickCommandPage() {
         </div>
 
         {/* Description */}
-        <div className="space-y-1.5">
+        <div className="shrink-0 space-y-1.5">
           <Label htmlFor="qc-desc" className="text-xs text-muted-foreground">
             {t("quickCommands.description")}
           </Label>
@@ -261,7 +261,7 @@ export default function QuickCommandPage() {
         </div>
 
         {/* Color Tag & Pinned */}
-        <div className="flex flex-row items-center gap-4 border p-2 rounded-md bg-muted/20">
+        <div className="flex shrink-0 flex-row items-center gap-4 border p-2 rounded-md bg-muted/20">
           <div className="min-w-0 flex-1 space-y-1">
             <Label className="text-[0.6875rem] text-muted-foreground">
               {t("quickCommands.colorTag")}
@@ -332,7 +332,7 @@ export default function QuickCommandPage() {
         </div>
 
         {/* Execution Mode */}
-        <div className="space-y-1.5">
+        <div className="shrink-0 space-y-1.5">
           <Label className="text-xs text-muted-foreground">
             {t("quickCommands.executionMode")}
           </Label>
@@ -358,7 +358,7 @@ export default function QuickCommandPage() {
         </div>
 
         {/* Script / Command */}
-        <div className="space-y-1.5">
+        <div className="flex min-h-32 flex-1 flex-col gap-1.5">
           <div className="flex justify-between items-center">
             <Label htmlFor="qc-command" className="text-xs text-muted-foreground">
               {t("quickCommands.commandScript")}
@@ -369,7 +369,7 @@ export default function QuickCommandPage() {
           </div>
           <Textarea
             id="qc-command"
-            className={`font-mono text-sm resize-none h-28 bg-muted/30 ${errors.command ? "border-destructive focus-visible:ring-destructive" : ""}`}
+            className={`min-h-28 flex-1 resize-none overflow-auto bg-muted/30 font-mono text-sm ${errors.command ? "border-destructive focus-visible:ring-destructive" : ""}`}
             style={{ fieldSizing: "fixed" } as CSSProperties}
             placeholder={t("quickCommands.commandPlaceholder")}
             value={command}
@@ -381,7 +381,7 @@ export default function QuickCommandPage() {
         </div>
 
         {errors.general && (
-          <div className="text-sm text-destructive bg-destructive/10 p-2.5 rounded border border-destructive/30">
+          <div className="shrink-0 text-sm text-destructive bg-destructive/10 p-2.5 rounded border border-destructive/30">
             {errors.general}
           </div>
         )}
