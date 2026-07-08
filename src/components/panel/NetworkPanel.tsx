@@ -506,6 +506,7 @@ export default function NetworkPanel() {
 
   const connectionOptions = useMemo<ConnectionOption[]>(() => {
     return [...savedConnections]
+      .filter((connection) => connection.type === "ssh")
       .map((connection) => {
         const groupPath = buildGroupPath(connection.group_id, groupsById);
         const subtitle = groupPath
@@ -782,9 +783,9 @@ export default function NetworkPanel() {
                     size="sm"
                     className="h-7 px-2 text-primary text-xs"
                     onClick={() => setTunnelDialog("new")}
-                    disabled={savedConnections.length === 0}
+                    disabled={connectionOptions.length === 0}
                     title={
-                      savedConnections.length === 0 ? t("network.bindConnectionFirst") : undefined
+                      connectionOptions.length === 0 ? t("network.bindConnectionFirst") : undefined
                     }
                   >
                     <MdAdd className="text-base mr-1" />
@@ -798,12 +799,12 @@ export default function NetworkPanel() {
                   <EmptyState
                     icon={MdLan}
                     title={
-                      savedConnections.length === 0
+                      connectionOptions.length === 0
                         ? t("network.noConnections")
                         : t("network.noTunnels")
                     }
                     description={
-                      savedConnections.length === 0
+                      connectionOptions.length === 0
                         ? t("network.noConnectionsHint")
                         : t("network.tunnelEmptyHint")
                     }
