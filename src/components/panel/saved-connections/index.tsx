@@ -133,6 +133,7 @@ export default function SavedConnections({
   const searchExpandedBaseRef = useRef<Set<string> | null>(null);
   const searchAutoExpandedGroupIdsRef = useRef<Set<string>>(new Set());
   const previousKeywordRef = useRef("");
+  const restoredLastOpenedConnectionIdRef = useRef<string | null>(null);
   const lastSelectedConnectionIdRef = useRef<string | null>(null);
   const sortMode = (appSettings.ui.saved_connections_sort_mode || "default") as SortMode;
 
@@ -233,6 +234,59 @@ export default function SavedConnections({
 
     return { rootNodes: keyword ? roots.filter(prune) : roots, ungrouped: noGroup };
   }, [savedConnections, savedGroups, keyword, sortMode]);
+
+  useEffect(() => {
+    const connectionId = appSettings.ui.saved_connections_last_opened_connection_id;
+    if (!connectionId || restoredLastOpenedConnectionIdRef.current === connectionId) return;
+
+    const connection = savedConnections.find((item) => item.id === connectionId);
+    if (!connection) {
+      if (savedConnections.length > 0) {
+        restoredLastOpenedConnectionIdRef.current = connectionId;
+      }
+      return;
+    }
+
+    const initialGroupId = connection.group_id;
+    if (!initialGroupId) {
+      restoredLastOpenedConnectionIdRef.current = connectionId;
+      return;
+    }
+
+    if (savedGroups.length === 0) return;
+
+    const groupsById = new Map(savedGroups.map((group) => [group.id, group]));
+    const groupIdsToOpen: string[] = [];
+    const visitedGroupIds = new Set<string>();
+    let currentGroupId: string | undefined = initialGroupId;
+
+    while (currentGroupId && !visitedGroupIds.has(currentGroupId)) {
+      visitedGroupIds.add(currentGroupId);
+      const group = groupsById.get(currentGroupId);
+      if (!group) break;
+      groupIdsToOpen.push(group.id);
+      currentGroupId = group.parent_id;
+    }
+
+    restoredLastOpenedConnectionIdRef.current = connectionId;
+    if (groupIdsToOpen.length === 0) return;
+
+    setExpandedGroups((prev) => {
+      const next = new Set(prev);
+      let changed = false;
+      groupIdsToOpen.forEach((groupId) => {
+        if (!next.has(groupId)) {
+          next.add(groupId);
+          changed = true;
+        }
+      });
+      return changed ? next : prev;
+    });
+  }, [
+    appSettings.ui.saved_connections_last_opened_connection_id,
+    savedConnections,
+    savedGroups,
+  ]);
 
   useEffect(() => {
     const previousKeyword = previousKeywordRef.current;
@@ -467,6 +521,7 @@ export default function SavedConnections({
       }
       updateTabSession(tabId, sessionId);
       recordRecentConnection(conn.id);
+      updateUi({ saved_connections_last_opened_connection_id: conn.id });
     } catch (e) {
       const errorMessage = getErrorMessage(e);
       if (errorMessage.toLowerCase().includes("session creation cancelled") || !hasTab(tabId)) {
