@@ -450,7 +450,7 @@ export default function SendCommandPanel({
     sendingRef.current = true;
     setIsSending(true);
     setProgress(
-      count === null || count > 1
+      count === null || count > 1 || units.length > 1
         ? {
             completedUnits: 0,
             totalUnits: count === null ? null : units.length * count,
