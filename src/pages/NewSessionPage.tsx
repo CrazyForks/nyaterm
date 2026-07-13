@@ -10,6 +10,7 @@ import {
 } from "@/components/dialog/network/shared";
 import {
   DEFAULT_CONNECTION_ICON,
+  LINUX_ICONS,
   resolveConnectionIcon,
   SERVER_ICONS,
   SYSTEM_ICONS,
@@ -34,8 +35,8 @@ import type {
   OtpEntry,
   ProxyConfig,
   SavedConnection,
-  SshAlgorithmPreferences,
   SftpSettings,
+  SshAlgorithmPreferences,
 } from "@/types/global";
 
 const isValidPort = (value: number) => Number.isInteger(value) && value >= 1 && value <= 65535;
@@ -760,6 +761,23 @@ export default function NewSessionPage() {
                           type="button"
                           className={`flex h-7 w-7 items-center justify-center rounded transition-colors hover:bg-accent ${activeKey === key ? "bg-primary/15 ring-1 ring-primary/40" : ""}`}
                           title={key === DEFAULT_CONNECTION_ICON ? t("dialog.none") : key}
+                          onClick={() => {
+                            setIconKey(key);
+                            setShowIconPicker(false);
+                          }}
+                        >
+                          <IconComp style={{ color: def.color }} className="text-sm" />
+                        </button>
+                      );
+                    })}
+                    {Object.entries(LINUX_ICONS).map(([key, def]) => {
+                      const IconComp = def.icon;
+                      return (
+                        <button
+                          key={key}
+                          type="button"
+                          className={`flex h-7 w-7 items-center justify-center rounded transition-colors hover:bg-accent ${iconKey === key ? "bg-primary/15 ring-1 ring-primary/40" : ""}`}
+                          title={key}
                           onClick={() => {
                             setIconKey(key);
                             setShowIconPicker(false);

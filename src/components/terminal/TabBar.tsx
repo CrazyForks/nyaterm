@@ -35,7 +35,7 @@ import { getActiveGroupForSession, isSessionPausedInGroup } from "@/lib/syncInpu
 import { getActivePane, getTabDisplayName } from "@/lib/workspaceTabs";
 import type { Group, PaneSplitDirection, SavedConnection, Tab } from "@/types/global";
 import { useApp } from "../../context/AppContext";
-import { CONNECTION_ICONS } from "../icons";
+import { resolveConnectionIcon } from "../icons";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -942,8 +942,8 @@ function TabBar({
     const conn = pane?.connectionId
       ? savedConnections.find((connection) => connection.id === pane.connectionId)
       : undefined;
-    const iconDef = conn?.icon ? CONNECTION_ICONS[conn.icon] : null;
-    if (iconDef) {
+    if (conn?.icon) {
+      const iconDef = resolveConnectionIcon(conn.icon);
       const IconComp = iconDef.icon;
       return <IconComp className="text-sm shrink-0" style={{ color: iconDef.color }} />;
     }
@@ -987,8 +987,8 @@ function TabBar({
   };
 
   const renderConnectionIcon = (connection: SavedConnection) => {
-    const iconDef = connection.icon ? CONNECTION_ICONS[connection.icon] : null;
-    if (iconDef) {
+    if (connection.icon) {
+      const iconDef = resolveConnectionIcon(connection.icon);
       const IconComp = iconDef.icon;
       return <IconComp className="text-sm shrink-0" style={{ color: iconDef.color }} />;
     }
