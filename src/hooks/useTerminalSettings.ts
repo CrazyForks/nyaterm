@@ -139,11 +139,7 @@ export function useTerminalSettings(
     const terminal = terminalInstance ?? terminalRef.current;
     if (!terminal) return;
 
-    const patch = installMacImeCompatibilityPatch(
-      terminal,
-      interaction.mac_ime_compatibility,
-      sessionId,
-    );
+    const patch = installMacImeCompatibilityPatch(terminal, true, sessionId);
     return () => patch.dispose();
-  }, [interaction.mac_ime_compatibility, terminalInstance, terminalRef, sessionId]);
+  }, [terminalInstance, terminalRef, sessionId]);
 }
