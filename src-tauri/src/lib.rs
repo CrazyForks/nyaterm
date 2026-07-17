@@ -226,6 +226,7 @@ pub fn run() {
             cmd::backup::import_config,
             cmd::stats::get_remote_stats,
             cmd::stats::get_terminal_cwd,
+            cmd::stats::try_get_terminal_cwd,
             cmd::process::get_remote_processes,
             cmd::process::signal_remote_process,
             cmd::process::renice_remote_process,
