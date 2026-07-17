@@ -310,14 +310,36 @@ export default function ConnectionItem({ conn, indented, depth = 0 }: Connection
           onPointerDown={
             isPointerDragEnabled
               ? (e) => {
+                  e.stopPropagation();
                   closeAndSuppressDetails();
                   handlePointerDragStart(e, "connection", conn.id);
                 }
               : undefined
           }
-          onPointerMove={isPointerDragEnabled ? handlePointerDragMove : undefined}
-          onPointerUp={isPointerDragEnabled ? handlePointerDragEnd : undefined}
-          onPointerCancel={isPointerDragEnabled ? handlePointerDragCancel : undefined}
+          onPointerMove={
+            isPointerDragEnabled
+              ? (e) => {
+                  e.stopPropagation();
+                  handlePointerDragMove(e);
+                }
+              : undefined
+          }
+          onPointerUp={
+            isPointerDragEnabled
+              ? (e) => {
+                  e.stopPropagation();
+                  handlePointerDragEnd(e);
+                }
+              : undefined
+          }
+          onPointerCancel={
+            isPointerDragEnabled
+              ? (e) => {
+                  e.stopPropagation();
+                  handlePointerDragCancel(e);
+                }
+              : undefined
+          }
           onDragStart={
             isDragEnabled
               ? (e) => {
