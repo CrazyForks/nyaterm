@@ -97,7 +97,7 @@ import {
   readRecentOutput,
 } from "./terminalInputSelection";
 import { createTerminalLinkHandlers } from "./terminalLinkHandlers";
-import type { PerformanceMode, PerformanceOverlayState, XTerminalProps } from "./xterminalTypes";
+import type { PerformanceMode, XTerminalProps } from "./xterminalTypes";
 import { createZmodemEventHandler, type ZmodemEventPayload } from "./zmodemTerminalEvents";
 import "@xterm/xterm/css/xterm.css";
 
@@ -243,8 +243,6 @@ export default function XTerminal({
   const [terminalInstance, setTerminalInstance] = useState<Terminal | null>(null);
   const [terminalReady, setTerminalReady] = useState(false);
   const [performanceMode, setPerformanceMode] = useState<PerformanceMode>("normal");
-  const [performanceOverlay, setPerformanceOverlay] = useState<PerformanceOverlayState>(null);
-  const [skippedOutputBytes, setSkippedOutputBytes] = useState(0);
   const [multiLinePasteText, setMultiLinePasteText] = useState<string | null>(null);
   const [isExternalDropActive, setIsExternalDropActive] = useState(false);
   const aiCapturingRef = useRef(false);
@@ -300,8 +298,6 @@ export default function XTerminal({
   const visibleRef = useRef(visible);
   const activeRef = useRef(active);
   const performanceModeRef = useRef<PerformanceMode>("normal");
-  const performanceOverlayTimerRef = useRef<number | null>(null);
-  const skippedOutputBytesRef = useRef(0);
   const queuedOutputChunksRef = useRef<QueuedOutputChunk[]>([]);
   const queuedOutputBytesRef = useRef(0);
   const writingOutputBytesRef = useRef(0);
@@ -309,6 +305,7 @@ export default function XTerminal({
   const pendingOutputAckBytesRef = useRef(0);
   const outputAckTimerRef = useRef<number | null>(null);
   const pendingOutputFlushRef = useRef<number | null>(null);
+  const pendingOutputMicrotaskRef = useRef(false);
   const pendingOutputFlushTimerRef = useRef<number | null>(null);
   const lastAlternateScreenWriteAtRef = useRef(0);
   const handleVisibilityChangeRef = useRef<(() => void) | null>(null);
@@ -403,33 +400,22 @@ export default function XTerminal({
     tRef.current = t;
   }, [t]);
 
-  const clearPerformanceOverlayTimer = useCallback(() => {
-    if (performanceOverlayTimerRef.current !== null) {
-      window.clearTimeout(performanceOverlayTimerRef.current);
-      performanceOverlayTimerRef.current = null;
-    }
-  }, []);
-
   const enterOverloadedMode = useCallback(() => {
-    clearPerformanceOverlayTimer();
     performanceModeRef.current = "overloaded";
     setPerformanceMode("overloaded");
-    setPerformanceOverlay("overloaded");
-  }, [clearPerformanceOverlayTimer]);
+  }, []);
 
-  const exitOverloadedMode = useCallback(() => {
-    clearPerformanceOverlayTimer();
-    performanceModeRef.current = "normal";
-    setPerformanceMode("normal");
-    setPerformanceOverlay("recovered");
-    performanceOverlayTimerRef.current = window.setTimeout(() => {
-      setPerformanceOverlay((current) => (current === "recovered" ? null : current));
-      performanceOverlayTimerRef.current = null;
-    }, XTERM_PERFORMANCE_CONFIG.output.recoveryNoticeMs);
-  }, [clearPerformanceOverlayTimer]);
+  const setOutputPressureMode = useCallback((mode: PerformanceMode) => {
+    if (performanceModeRef.current === mode) return;
+    performanceModeRef.current = mode;
+    setPerformanceMode(mode);
+  }, []);
 
-  const formatSkippedCount = useCallback(
-    (value: number) => new Intl.NumberFormat().format(value),
+  const exitOverloadedMode = useCallback(
+    (nextMode: PerformanceMode = "normal") => {
+      performanceModeRef.current = nextMode;
+      setPerformanceMode(nextMode);
+    },
     [],
   );
 
@@ -453,7 +439,7 @@ export default function XTerminal({
     terminal: terminalInstance,
     sessionId,
     visible: visible && active,
-    performanceMode,
+    performanceMode: performanceMode === "strained" ? "busy" : performanceMode,
   });
 
   // Shell integration state
@@ -564,17 +550,14 @@ export default function XTerminal({
     backendUnackedOutputBytesRef.current = 0;
     pendingOutputAckBytesRef.current = 0;
     lastAlternateScreenWriteAtRef.current = 0;
-    skippedOutputBytesRef.current = 0;
     outputWriteInFlightRef.current = false;
     outputWriteQueueRef.current = Promise.resolve();
+    pendingOutputMicrotaskRef.current = false;
     disconnectedRef.current = false;
     reconnectingRef.current = false;
     performanceModeRef.current = "normal";
     resetCredentialAutofill();
     setPerformanceMode("normal");
-    setPerformanceOverlay(null);
-    setSkippedOutputBytes(0);
-    clearPerformanceOverlayTimer();
     let disposed = false;
 
     const terminal = new Terminal({
@@ -1411,7 +1394,7 @@ export default function XTerminal({
       }
       const terminalSettings = terminalAppSettingsRef.current?.terminal;
       if (
-        performanceModeRef.current !== "overloaded" &&
+        performanceModeRef.current === "normal" &&
         (terminalSettings?.show_line_numbers || terminalSettings?.show_timestamps)
       ) {
         window.dispatchEvent(new CustomEvent("nyaterm:refresh-gutter", { detail: { sessionId } }));
@@ -1465,7 +1448,7 @@ export default function XTerminal({
 
     const refreshGutter = () => {
       if (!isTerminalAlive()) return;
-      if (performanceModeRef.current === "overloaded") return;
+      if (performanceModeRef.current !== "normal") return;
       const terminalSettings = terminalAppSettingsRef.current?.terminal;
       if (!terminalSettings?.show_line_numbers && !terminalSettings?.show_timestamps) return;
       window.dispatchEvent(new CustomEvent("nyaterm:refresh-gutter", { detail: { sessionId } }));
@@ -1492,7 +1475,7 @@ export default function XTerminal({
         }
       }
 
-      if (performanceModeRef.current !== "overloaded") {
+      if (performanceModeRef.current === "normal") {
         refreshGutter();
       }
     };
@@ -1535,10 +1518,18 @@ export default function XTerminal({
       writingOutputBytesRef.current +
       pendingOutputAckBytesRef.current;
 
+    const getNonOverloadedPressureMode = (): PerformanceMode =>
+      getPendingOutputBytes() >= XTERM_PERFORMANCE_CONFIG.output.strainedBacklogBytes
+        ? "strained"
+        : "normal";
+
+    const refreshOutputPressureMode = () => {
+      if (performanceModeRef.current === "overloaded") return;
+      setOutputPressureMode(getNonOverloadedPressureMode());
+    };
+
     const noteSkippedOutput = (count: number) => {
       if (count <= 0) return;
-      skippedOutputBytesRef.current += count;
-      setSkippedOutputBytes(skippedOutputBytesRef.current);
       enterOverloadedMode();
     };
 
@@ -1688,8 +1679,14 @@ export default function XTerminal({
       if (!isTerminalAlive()) return;
       if (performanceModeRef.current !== "overloaded") return;
       if (getPendingOutputBytes() > getRecoveryThresholdBytes()) return;
-      exitOverloadedMode();
+      exitOverloadedMode(getNonOverloadedPressureMode());
     };
+
+    const shouldUseLowLatencyFlush = () =>
+      visibleRef.current &&
+      !isAlternateScreenActive() &&
+      performanceModeRef.current !== "overloaded" &&
+      getPendingOutputBytes() <= XTERM_PERFORMANCE_CONFIG.output.lowLatencyFlushBacklogBytes;
 
     const writeChunkToTerminal = (payload: QueuedOutputChunk) => {
       writingOutputBytesRef.current += payload.bytes;
@@ -1736,15 +1733,17 @@ export default function XTerminal({
 
                   flushPendingOutputAck(queuedOutputBytesRef.current === 0);
                   maybeRecoverPerformanceMode();
+                  refreshOutputPressureMode();
                   resolve();
 
                   if (
                     visibleRef.current &&
                     isTerminalAlive() &&
                     queuedOutputBytesRef.current > 0 &&
-                    pendingOutputFlushRef.current === null
+                    pendingOutputFlushRef.current === null &&
+                    !pendingOutputMicrotaskRef.current
                   ) {
-                    pendingOutputFlushRef.current = requestAnimationFrame(flushPendingOutput);
+                    schedulePendingOutputFlush();
                   }
                 });
               } catch {
@@ -1757,6 +1756,7 @@ export default function XTerminal({
                 noteSkippedOutput(payload.bytes);
                 flushPendingOutputAck(true);
                 maybeRecoverPerformanceMode();
+                refreshOutputPressureMode();
                 resolve();
               }
             }),
@@ -1766,11 +1766,13 @@ export default function XTerminal({
     const flushPendingOutput = () => {
       pendingOutputFlushRef.current = null;
       if (!visibleRef.current || !isTerminalAlive() || outputWriteInFlightRef.current) {
+        refreshOutputPressureMode();
         return;
       }
 
       const dropped = trimQueuedOutput(getBacklogCapBytes());
       noteSkippedOutput(dropped);
+      refreshOutputPressureMode();
 
       if (shouldThrottleAlternateScreenWrite()) {
         const now = Date.now();
@@ -1794,6 +1796,7 @@ export default function XTerminal({
       if (!payload) {
         flushPendingOutputAck(true);
         maybeRecoverPerformanceMode();
+        refreshOutputPressureMode();
         return;
       }
 
@@ -1803,16 +1806,40 @@ export default function XTerminal({
       writeChunkToTerminal(payload);
     };
 
-    const schedulePendingOutputFlush = () => {
+    const schedulePendingOutputFlush = (preferImmediate = false) => {
       if (!visibleRef.current || !isTerminalAlive()) return;
       if (
         outputWriteInFlightRef.current ||
         pendingOutputFlushRef.current !== null ||
-        pendingOutputFlushTimerRef.current !== null
+        pendingOutputFlushTimerRef.current !== null ||
+        pendingOutputMicrotaskRef.current
       ) {
         return;
       }
+
+      if (preferImmediate || shouldUseLowLatencyFlush()) {
+        pendingOutputMicrotaskRef.current = true;
+        queueMicrotask(() => {
+          pendingOutputMicrotaskRef.current = false;
+          flushPendingOutput();
+        });
+        return;
+      }
+
       pendingOutputFlushRef.current = requestAnimationFrame(flushPendingOutput);
+    };
+
+    const repaintVisibleTerminal = () => {
+      if (!visibleRef.current || !isTerminalAlive()) return;
+      requestAnimationFrame(() => {
+        if (!visibleRef.current || !isTerminalAlive()) return;
+        terminal.clearTextureAtlas();
+        terminal.refresh(0, Math.max(0, terminal.rows - 1));
+        requestAnimationFrame(() => {
+          if (!visibleRef.current || !isTerminalAlive()) return;
+          terminal.refresh(0, Math.max(0, terminal.rows - 1));
+        });
+      });
     };
 
     const applyVisibilityPolicy = () => {
@@ -1826,15 +1853,16 @@ export default function XTerminal({
         clearPendingOutputFlushTimer();
       }
 
-      if (visibleRef.current) {
-        const dropped = trimQueuedOutput(getBacklogCapBytes());
-        noteSkippedOutput(dropped);
-      }
+      const dropped = trimQueuedOutput(getBacklogCapBytes());
+      noteSkippedOutput(dropped);
       flushPendingOutputAck(!visibleRef.current);
       maybeRecoverPerformanceMode();
+      refreshOutputPressureMode();
 
       if (visibleRef.current) {
+        flushPendingOutput();
         schedulePendingOutputFlush();
+        repaintVisibleTerminal();
       }
     };
 
@@ -1876,6 +1904,11 @@ export default function XTerminal({
           noteSkippedOutput(payload.droppedBytes ?? 0);
 
           if (!visibleRef.current) {
+            const dropped = trimQueuedOutput(getBacklogCapBytes());
+            noteSkippedOutput(dropped);
+            flushPendingOutputAck(true);
+            maybeRecoverPerformanceMode();
+            refreshOutputPressureMode();
             window.dispatchEvent(
               new CustomEvent("nyaterm:session-output", {
                 detail: { sessionId },
@@ -1886,6 +1919,7 @@ export default function XTerminal({
 
           const dropped = trimQueuedOutput(getBacklogCapBytes());
           noteSkippedOutput(dropped);
+          refreshOutputPressureMode();
           schedulePendingOutputFlush();
         },
       );
@@ -2391,18 +2425,18 @@ export default function XTerminal({
         pendingOutputFlushRef.current = null;
       }
       clearPendingOutputFlushTimer();
+      pendingOutputMicrotaskRef.current = false;
       flushPendingOutputAck(true);
       sendOutputAck(backendUnackedOutputBytesRef.current);
-      clearPerformanceOverlayTimer();
       queuedOutputChunksRef.current = [];
       queuedOutputBytesRef.current = 0;
       writingOutputBytesRef.current = 0;
       pendingOutputAckBytesRef.current = 0;
       backendUnackedOutputBytesRef.current = 0;
       lastAlternateScreenWriteAtRef.current = 0;
-      skippedOutputBytesRef.current = 0;
       outputWriteInFlightRef.current = false;
       outputWriteQueueRef.current = Promise.resolve();
+      pendingOutputMicrotaskRef.current = false;
       const latestLifecycleState = terminalLifecycleStateRef.current;
       if (
         latestLifecycleState.sessionId === sessionId &&
@@ -2442,7 +2476,7 @@ export default function XTerminal({
     terminalSettings,
     sessionId,
     isDark,
-    performanceMode === "overloaded" || !visible,
+    performanceMode !== "normal" || !visible,
   );
 
   const { tooltipState, menuState, closeMenu } = useActionLinks(
@@ -2450,7 +2484,7 @@ export default function XTerminal({
     terminalSettings,
     sessionId,
     replaceInputCommandRef,
-    performanceMode === "overloaded" || !visible,
+    performanceMode !== "normal" || !visible,
   );
 
   useEffect(() => {
@@ -2458,7 +2492,7 @@ export default function XTerminal({
       requestAnimationFrame(() => {
         fitAddonRef.current?.fit();
         terminalRef.current?.refresh(0, Math.max(0, terminalRef.current.rows - 1));
-        if (showGutter && performanceMode !== "overloaded") {
+        if (showGutter && performanceMode === "normal") {
           window.dispatchEvent(
             new CustomEvent("nyaterm:refresh-gutter", {
               detail: { sessionId },
@@ -2669,7 +2703,7 @@ export default function XTerminal({
           lineTimestamps={lineTimestampsRef.current}
           getLineOffset={getGutterLineOffset}
           sessionId={sessionId}
-          suspended={performanceMode === "overloaded" || !visible}
+          suspended={performanceMode !== "normal" || !visible}
         />
       )}
       <div
@@ -2699,33 +2733,6 @@ export default function XTerminal({
 
         {isExternalDropActive && (
           <ExternalFileDropOverlay title={dropOverlayCopy.title} hint={dropOverlayCopy.hint} />
-        )}
-
-        {performanceOverlay && (
-          <div className="pointer-events-none absolute inset-x-3 top-3 z-20 flex justify-end">
-            <div
-              className="max-w-sm rounded-md border px-3 py-2 text-xs shadow-lg"
-              style={{
-                borderColor: "var(--df-border)",
-                backgroundColor: "var(--df-bg-panel)",
-                color: "var(--df-text)",
-              }}
-            >
-              <div className="font-medium">
-                {performanceOverlay === "overloaded"
-                  ? t("terminal.largeOutputProtectionActive")
-                  : t("terminal.largeOutputProtectionRecovered")}
-              </div>
-              <div className="mt-1 leading-5" style={{ color: "var(--df-text-dimmed)" }}>
-                {t(
-                  performanceOverlay === "overloaded"
-                    ? "terminal.largeOutputProtectionActiveDetail"
-                    : "terminal.largeOutputProtectionRecoveredDetail",
-                  { skipped: formatSkippedCount(skippedOutputBytes) },
-                )}
-              </div>
-            </div>
-          </div>
         )}
 
         {syncOverlay && <SyncActionOverlay overlay={syncOverlay} />}

@@ -6,6 +6,7 @@ import { isTerminalTransparencyEnabled } from "@/lib/backgroundImage";
 import { resolveTerminalFontSize } from "@/lib/terminalFontSize";
 import type { TerminalColors } from "@/lib/themes";
 import { installImeCompatibilityPatch } from "@/lib/xtermImeCompatibility";
+import { XTERM_PERFORMANCE_CONFIG } from "@/lib/xtermPerformance";
 import type { AppSettings } from "@/types/global";
 
 export function useTerminalSettings(
@@ -21,8 +22,12 @@ export function useTerminalSettings(
 ) {
   const webglAddonRef = useRef<WebglAddon | null>(null);
   const webglTerminalRef = useRef<Terminal | null>(null);
-  const webglFailedRef = useRef(false);
+  const webglCircuitBrokenRef = useRef(false);
+  const webglContextLossesRef = useRef<number[]>([]);
   const textureRefreshFrameRef = useRef<number | null>(null);
+  const revealRefreshFrameRef = useRef<number | null>(null);
+  const hiddenWebglDisposeTimerRef = useRef<number | null>(null);
+  const contextLossRetryTimerRef = useRef<number | null>(null);
   const terminalTransparencyEnabled = isTerminalTransparencyEnabled(appearance);
 
   const cancelTextureRefresh = useCallback(() => {
@@ -40,6 +45,27 @@ export function useTerminalSettings(
     webglTerminalRef.current = null;
   }, []);
 
+  const clearHiddenWebglDisposeTimer = useCallback(() => {
+    if (hiddenWebglDisposeTimerRef.current !== null) {
+      window.clearTimeout(hiddenWebglDisposeTimerRef.current);
+      hiddenWebglDisposeTimerRef.current = null;
+    }
+  }, []);
+
+  const clearContextLossRetryTimer = useCallback(() => {
+    if (contextLossRetryTimerRef.current !== null) {
+      window.clearTimeout(contextLossRetryTimerRef.current);
+      contextLossRetryTimerRef.current = null;
+    }
+  }, []);
+
+  const cancelRevealRefresh = useCallback(() => {
+    if (revealRefreshFrameRef.current !== null) {
+      cancelAnimationFrame(revealRefreshFrameRef.current);
+      revealRefreshFrameRef.current = null;
+    }
+  }, []);
+
   const scheduleTextureRefresh = useCallback(() => {
     if (textureRefreshFrameRef.current !== null) return;
     textureRefreshFrameRef.current = requestAnimationFrame(() => {
@@ -51,12 +77,50 @@ export function useTerminalSettings(
     });
   }, [terminalRef]);
 
+  const scheduleRevealRefresh = useCallback(() => {
+    cancelRevealRefresh();
+    let remainingFrames = XTERM_PERFORMANCE_CONFIG.webgl.revealRefreshFrames;
+    const refreshNextFrame = () => {
+      revealRefreshFrameRef.current = requestAnimationFrame(() => {
+        const terminal = terminalRef.current;
+        if (terminal) {
+          terminal.clearTextureAtlas();
+          terminal.refresh(0, Math.max(0, terminal.rows - 1));
+        }
+
+        remainingFrames -= 1;
+        if (remainingFrames > 0) {
+          refreshNextFrame();
+        } else {
+          revealRefreshFrameRef.current = null;
+        }
+      });
+    };
+    refreshNextFrame();
+  }, [cancelRevealRefresh, terminalRef]);
+
   useEffect(() => {
     return () => {
       cancelTextureRefresh();
+      cancelRevealRefresh();
+      clearHiddenWebglDisposeTimer();
+      clearContextLossRetryTimer();
       disposeWebgl();
     };
-  }, [cancelTextureRefresh, disposeWebgl]);
+  }, [
+    cancelRevealRefresh,
+    cancelTextureRefresh,
+    clearContextLossRetryTimer,
+    clearHiddenWebglDisposeTimer,
+    disposeWebgl,
+  ]);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: WebGL circuit breaker intentionally resets when the terminal instance or hardware acceleration setting changes.
+  useEffect(() => {
+    webglCircuitBrokenRef.current = false;
+    webglContextLossesRef.current = [];
+    clearContextLossRetryTimer();
+  }, [clearContextLossRetryTimer, terminalInstance, terminalSettings.hardware_acceleration]);
 
   // React to hardware acceleration settings changes.
   useEffect(() => {
@@ -70,31 +134,71 @@ export function useTerminalSettings(
     const shouldUseWebgl =
       terminalSettings.hardware_acceleration &&
       !terminalTransparencyEnabled &&
-      !webglFailedRef.current;
+      !webglCircuitBrokenRef.current;
 
     if (!shouldUseWebgl) {
+      clearHiddenWebglDisposeTimer();
+      clearContextLossRetryTimer();
       disposeWebgl();
       return;
     }
 
-    if (!rendererVisible) return;
+    if (!rendererVisible) {
+      clearContextLossRetryTimer();
+      if (hiddenWebglDisposeTimerRef.current === null && webglAddonRef.current) {
+        hiddenWebglDisposeTimerRef.current = window.setTimeout(() => {
+          hiddenWebglDisposeTimerRef.current = null;
+          disposeWebgl();
+        }, XTERM_PERFORMANCE_CONFIG.webgl.hiddenDisposeDelayMs);
+      }
+      return;
+    }
 
-    if (!webglAddonRef.current) {
+    clearHiddenWebglDisposeTimer();
+    scheduleRevealRefresh();
+
+    const installWebgl = (targetTerminal: Terminal) => {
       try {
         const webgl = new WebglAddon();
         webgl.onContextLoss(() => {
           webgl.dispose();
           webglAddonRef.current = null;
           webglTerminalRef.current = null;
-          webglFailedRef.current = true;
+          const now = Date.now();
+          const lossWindowMs = XTERM_PERFORMANCE_CONFIG.webgl.contextLossWindowMs;
+          webglContextLossesRef.current = [...webglContextLossesRef.current, now].filter(
+            (lossAt) => now - lossAt <= lossWindowMs,
+          );
+
+          if (
+            webglContextLossesRef.current.length >
+            XTERM_PERFORMANCE_CONFIG.webgl.contextLossCircuitBreakerLimit
+          ) {
+            webglCircuitBrokenRef.current = true;
+            clearContextLossRetryTimer();
+            return;
+          }
+
+          clearContextLossRetryTimer();
+          contextLossRetryTimerRef.current = window.setTimeout(() => {
+            contextLossRetryTimerRef.current = null;
+            const retryTerminal = terminalInstance ?? terminalRef.current;
+            if (!retryTerminal || !rendererVisible || webglCircuitBrokenRef.current) return;
+            installWebgl(retryTerminal);
+          }, XTERM_PERFORMANCE_CONFIG.webgl.contextLossRetryDelayMs);
         });
-        terminal.loadAddon(webgl);
+        targetTerminal.loadAddon(webgl);
         webglAddonRef.current = webgl;
-        webglTerminalRef.current = terminal;
+        webglTerminalRef.current = targetTerminal;
+        scheduleRevealRefresh();
       } catch {
         // Fallback to DOM renderer if WebGL initialization fails
-        webglFailedRef.current = true;
+        webglCircuitBrokenRef.current = true;
       }
+    };
+
+    if (!webglAddonRef.current) {
+      installWebgl(terminal);
     }
   }, [
     terminalSettings.hardware_acceleration,
@@ -102,7 +206,10 @@ export function useTerminalSettings(
     rendererVisible,
     terminalRef,
     terminalInstance,
+    clearContextLossRetryTimer,
+    clearHiddenWebglDisposeTimer,
     disposeWebgl,
+    scheduleRevealRefresh,
   ]);
   // React to terminal theme changes: update terminal colors dynamically
   useEffect(() => {
