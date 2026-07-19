@@ -8,13 +8,15 @@ use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::oneshot;
 
-use crate::config::{self, AiMode, AiSettings};
+use crate::config::{self, AiBackendKind, AiMode, AiSettings};
 use crate::core::session::SessionManager;
 use crate::error::{AppError, AppResult};
 
 use super::agent::{AgentApprovalManager, run_agent_stream};
 use super::history::{append_message, load_history, save_user_message, validate_session_scope};
-use super::model::{build_chat_options, build_client, resolve_request_model};
+use super::model::{
+    build_chat_options, build_client, resolve_request_model, resolve_request_model_config,
+};
 use super::parser::{
     bind_command_card_targets, extract_text_from_assistant, parse_model_output,
     trim_string_to_option, truncate_preview,
@@ -96,12 +98,35 @@ pub fn start_chat_stream(
         streams.insert(stream_id.clone(), cancel_tx);
     }
 
+    let selected_model = resolve_request_model_config(&settings.ai, &request)?;
+    let is_codex = selected_model.backend == AiBackendKind::Codex;
     let is_agent = request.mode == AiMode::Agent;
     let task_app = app.clone();
     let task_stream_id = stream_id.clone();
     let task_session_id = session_id.clone();
 
-    if is_agent {
+    if is_codex {
+        use tauri::Manager;
+        let approval_manager = app.state::<Arc<AgentApprovalManager>>().inner().clone();
+        let codex_manager = app
+            .state::<Arc<super::CodexAppServerManager>>()
+            .inner()
+            .clone();
+        tauri::async_runtime::spawn(async move {
+            super::run_codex_stream(
+                task_app,
+                session_manager,
+                approval_manager,
+                codex_manager,
+                task_stream_id,
+                task_session_id,
+                request,
+                settings.ai,
+                cancel_rx,
+            )
+            .await;
+        });
+    } else if is_agent {
         use tauri::Manager;
         let approval_manager = app.state::<Arc<AgentApprovalManager>>().inner().clone();
         tauri::async_runtime::spawn(async move {

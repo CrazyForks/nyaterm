@@ -232,13 +232,8 @@ impl CloudSyncManager {
     }
 
     async fn complete_test_connection_success(&self) {
-        self.set_status(
-            "idle",
-            "Cloud connection verified".to_string(),
-            None,
-            None,
-        )
-        .await;
+        self.set_status("idle", "Cloud connection verified".to_string(), None, None)
+            .await;
     }
 
     pub async fn sync_push_now(self: &Arc<Self>, trigger: &str) -> AppResult<()> {

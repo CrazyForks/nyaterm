@@ -990,6 +990,8 @@ export type AIMode = "ask" | "agent";
 export type AIAgentCommandExecutionMode = "confirm_each" | "smart" | "auto";
 export type AIReasoningEffort = "auto" | "none" | "low" | "medium" | "high" | "xhigh";
 export type AIModelSource = "rust-genai" | "manual";
+export type AIBackendKind = "genai" | "codex";
+export type CodexThreadMode = "persistent" | "ephemeral";
 
 export type AIProviderKind =
   | "openai"
@@ -1007,11 +1009,20 @@ export type AIProviderKind =
 export interface AIModelConfigItem {
   id: string;
   name: string;
+  backend?: AIBackendKind;
   provider_kind?: AIProviderKind | null;
   credential_id?: string | null;
   enabled: boolean;
   source: AIModelSource;
   last_seen_at?: string | null;
+}
+
+export interface CodexIntegrationSettings {
+  enabled: boolean;
+  executable_path?: string | null;
+  default_model?: string | null;
+  thread_mode: CodexThreadMode;
+  remote_terminal_agent_enabled: boolean;
 }
 
 export interface AIProviderProfile {
@@ -1065,6 +1076,7 @@ export interface AISettings {
   agent_background_execution_enabled: boolean;
   agent_command_execution_mode: AIAgentCommandExecutionMode;
   agent_smart_auto_execute_max_risk: RiskLevel;
+  codex: CodexIntegrationSettings;
 }
 
 export interface AIContext {
@@ -1092,6 +1104,7 @@ export type AIAction =
 export interface AIModelDiscovery {
   id: string;
   name: string;
+  backend?: AIBackendKind;
   providerKind?: AIProviderKind | null;
   credentialId?: string | null;
   source: AIModelSource;
@@ -1152,6 +1165,10 @@ export interface AISession {
   title: string;
   createdAt: string;
   updatedAt: string;
+  backendMetadata?: {
+    backend: AIBackendKind;
+    externalThreadId?: string | null;
+  } | null;
 }
 
 export interface AIStreamStart {

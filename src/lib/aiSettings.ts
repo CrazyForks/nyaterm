@@ -17,9 +17,7 @@ export interface BuiltinProviderInfo {
 export const DEFAULT_AI_REQUEST_USER_AGENT =
   "codex-tui/0.125.0 (Ubuntu 22.4.0; x86_64) xterm-256color (codex-tui; 0.125.0)";
 
-export const BUILTIN_PROVIDERS: Partial<
-  Record<AIProviderKind, BuiltinProviderInfo>
-> = {
+export const BUILTIN_PROVIDERS: Partial<Record<AIProviderKind, BuiltinProviderInfo>> = {
   openai: {
     label: "OpenAI",
     defaultBaseUrl: null,
@@ -382,9 +380,7 @@ export function isBuiltinProvider(id: string): boolean {
   return BUILTIN_PROVIDER_KINDS.has(id as AIProviderKind);
 }
 
-export function getProviderLabel(
-  providerKind: AIProviderKind | string | null | undefined,
-): string {
+export function getProviderLabel(providerKind: AIProviderKind | string | null | undefined): string {
   if (!providerKind) return "";
   const builtin = BUILTIN_PROVIDERS[providerKind as AIProviderKind];
   if (builtin) return builtin.label;
@@ -420,23 +416,14 @@ export const CUSTOM_AI_PROVIDER_PROTOCOLS: Array<{
   { value: "gemini", labelKey: "ai.apiProtocolGemini" },
 ];
 
-const CUSTOM_PROVIDER_BASE_URL_PLACEHOLDERS: Record<
-  CustomAIProviderProtocol,
-  string
-> = {
+const CUSTOM_PROVIDER_BASE_URL_PLACEHOLDERS: Record<CustomAIProviderProtocol, string> = {
   openai_compatible: "https://api.example.com/v1/",
   anthropic: "https://api.anthropic.com/",
   gemini: "https://generativelanguage.googleapis.com/",
 };
 
-export function getCustomProviderBaseUrlPlaceholder(
-  providerKind: AIProviderKind,
-): string {
-  return (
-    CUSTOM_PROVIDER_BASE_URL_PLACEHOLDERS[
-      providerKind as CustomAIProviderProtocol
-    ] ?? ""
-  );
+export function getCustomProviderBaseUrlPlaceholder(providerKind: AIProviderKind): string {
+  return CUSTOM_PROVIDER_BASE_URL_PLACEHOLDERS[providerKind as CustomAIProviderProtocol] ?? "";
 }
 
 export function supportsCustomModelDiscovery(
@@ -452,10 +439,7 @@ export function supportsCustomModelDiscovery(
 export function requiresManualCustomModelEntry(
   credential: Pick<AIProviderCredential, "id" | "provider_kind">,
 ): boolean {
-  return (
-    !isBuiltinProvider(credential.id) &&
-    credential.provider_kind !== "openai_compatible"
-  );
+  return !isBuiltinProvider(credential.id) && credential.provider_kind !== "openai_compatible";
 }
 
 const DEFAULT_PROVIDER_PROFILES: AIProviderProfile[] = [
@@ -581,16 +565,12 @@ export function getModelProviderLabel(
 ): string {
   if (model.credential_id) {
     const cred = credentials.find((c) => c.id === model.credential_id);
-    if (cred && !isBuiltinProvider(cred.id))
-      return cred.name || "Custom Provider";
+    if (cred && !isBuiltinProvider(cred.id)) return cred.name || "Custom Provider";
   }
   return getProviderLabel(model.provider_kind);
 }
 
-export function aiModelIdForProvider(
-  providerKind: AIProviderKind,
-  name: string,
-) {
+export function aiModelIdForProvider(providerKind: AIProviderKind, name: string) {
   return `${providerKind}:${name}`;
 }
 
@@ -598,9 +578,7 @@ export function aiModelIdForCredential(credentialId: string, name: string) {
   return `${credentialId}:${name}`;
 }
 
-function credentialFromProfile(
-  profile: AIProviderProfile,
-): AIProviderCredential {
+function credentialFromProfile(profile: AIProviderProfile): AIProviderCredential {
   return {
     id: profile.id,
     name: profile.name,
@@ -612,7 +590,7 @@ function credentialFromProfile(
 }
 
 export const DEFAULT_AI_SETTINGS: AISettings = {
-  schema_version: 3,
+  schema_version: 4,
   enabled: false,
   context_line_limit: 200,
   redaction_enabled: true,
@@ -636,6 +614,13 @@ export const DEFAULT_AI_SETTINGS: AISettings = {
   agent_background_execution_enabled: false,
   agent_command_execution_mode: "confirm_each",
   agent_smart_auto_execute_max_risk: "low",
+  codex: {
+    enabled: false,
+    executable_path: null,
+    default_model: null,
+    thread_mode: "persistent",
+    remote_terminal_agent_enabled: false,
+  },
 };
 
 function normalizeLocaleTag(value?: string | null): string | null {
@@ -707,6 +692,7 @@ export function mergeModelDiscoveries(
         : {
             id: item.id,
             name: item.name,
+            backend: item.backend ?? "genai",
             provider_kind: item.providerKind ?? null,
             credential_id: item.credentialId ?? null,
             enabled: false,
@@ -717,7 +703,7 @@ export function mergeModelDiscoveries(
   }
 
   for (const old of oldModels) {
-    if (!seen.has(old.id) && old.source === "manual") {
+    if (!seen.has(old.id) && (old.source === "manual" || old.backend === "codex")) {
       merged.push(old);
     }
   }

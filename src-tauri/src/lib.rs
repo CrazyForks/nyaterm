@@ -40,6 +40,7 @@ pub fn run() {
     let quick_commands_store = Arc::new(QuickCommandsStore::new());
     let cloud_sync_manager = Arc::new(CloudSyncManager::new());
     let agent_approval_manager = Arc::new(AgentApprovalManager::new());
+    let codex_app_server_manager = Arc::new(core::ai::CodexAppServerManager::new());
     let transfer_duplicate_manager = Arc::new(TransferDuplicateManager::new());
     let docker_sudo_manager = Arc::new(DockerSudoManager::new());
     let app_lock_state = AppLockState::default();
@@ -72,6 +73,7 @@ pub fn run() {
         .manage(quick_commands_store.clone())
         .manage(cloud_sync_manager.clone())
         .manage(agent_approval_manager.clone())
+        .manage(codex_app_server_manager.clone())
         .manage(transfer_duplicate_manager.clone())
         .manage(docker_sudo_manager.clone())
         .manage(app_lock_state)
@@ -100,6 +102,11 @@ pub fn run() {
             cmd::ai::start_ai_chat_stream,
             cmd::ai::list_ai_model_names,
             cmd::ai::cancel_ai_chat_stream,
+            cmd::ai::detect_codex_cli,
+            cmd::ai::get_codex_account_status,
+            cmd::ai::start_codex_login,
+            cmd::ai::cancel_codex_login,
+            cmd::ai::logout_codex,
             cmd::ai::respond_agent_step,
             cmd::ai::get_ai_sessions,
             cmd::ai::get_ai_messages,

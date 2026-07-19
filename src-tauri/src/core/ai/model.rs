@@ -9,8 +9,9 @@ use reqwest::header::{HeaderMap, HeaderValue, USER_AGENT};
 use serde_json::Value;
 
 use crate::config::{
-    self, AI_REQUEST_USER_AGENT_DEFAULT, AiModelConfigItem, AiModelSource, AiProviderCredential,
-    AiProviderKind, AiReasoningEffort, AiSettings, ai_model_id_for_credential,
+    self, AI_REQUEST_USER_AGENT_DEFAULT, AiBackendKind, AiModelConfigItem, AiModelSource,
+    AiProviderCredential, AiProviderKind, AiReasoningEffort, AiSettings,
+    ai_model_id_for_credential,
 };
 use crate::error::{AppError, AppResult};
 use crate::utils::url::{join_api_base_url, normalize_api_base_url};
@@ -22,6 +23,32 @@ pub(super) struct ResolvedAiModel {
     pub model_name: String,
     pub provider_kind: AiProviderKind,
     pub credential: Option<AiProviderCredential>,
+}
+
+pub(super) fn resolve_request_model_config(
+    settings: &AiSettings,
+    request: &AiChatRequest,
+) -> AppResult<AiModelConfigItem> {
+    request
+        .model_id
+        .as_deref()
+        .and_then(|id| {
+            settings
+                .models
+                .iter()
+                .find(|model| model.enabled && model.id == id)
+        })
+        .or_else(|| {
+            settings.default_model_id.as_deref().and_then(|id| {
+                settings
+                    .models
+                    .iter()
+                    .find(|model| model.enabled && model.id == id)
+            })
+        })
+        .or_else(|| settings.models.iter().find(|model| model.enabled))
+        .cloned()
+        .ok_or_else(|| AppError::Config("No enabled AI model configured".to_string()))
 }
 
 pub(super) fn build_chat_options(settings: &AiSettings) -> ChatOptions {
@@ -58,25 +85,13 @@ pub(super) fn resolve_request_model(
         "Resolving AI model for request"
     );
 
-    let selected_model = request
-        .model_id
-        .as_deref()
-        .and_then(|id| {
-            settings
-                .models
-                .iter()
-                .find(|model| model.enabled && model.id == id)
-        })
-        .or_else(|| {
-            settings.default_model_id.as_deref().and_then(|id| {
-                settings
-                    .models
-                    .iter()
-                    .find(|model| model.enabled && model.id == id)
-            })
-        })
-        .or_else(|| settings.models.iter().find(|model| model.enabled))
-        .ok_or_else(|| AppError::Config("No enabled AI model configured".to_string()))?;
+    let selected_model = resolve_request_model_config(settings, request)?;
+
+    if selected_model.backend == AiBackendKind::Codex {
+        return Err(AppError::Config(
+            "Codex models must be routed through codex app-server".to_string(),
+        ));
+    }
 
     let model_provider_kind = selected_model
         .provider_kind
@@ -84,7 +99,7 @@ pub(super) fn resolve_request_model(
         .or_else(|| infer_provider_kind_from_model_id(&selected_model.id));
 
     let credential =
-        resolve_model_credential(settings, selected_model, model_provider_kind.as_ref())?;
+        resolve_model_credential(settings, &selected_model, model_provider_kind.as_ref())?;
     let provider_kind = credential
         .as_ref()
         .map(|credential| credential.provider_kind.clone())
@@ -347,6 +362,7 @@ pub async fn list_model_names(app: &tauri::AppHandle) -> AppResult<Vec<AiModelDi
                     models.entry(id.clone()).or_insert(AiModelDiscovery {
                         id,
                         name: trimmed.to_string(),
+                        backend: AiBackendKind::Genai,
                         provider_kind: Some(AiProviderKind::OpenaiCompatible),
                         credential_id: Some(credential.id.clone()),
                         source: AiModelSource::RustGenai,
@@ -687,6 +703,7 @@ mod tests {
         settings.models = vec![AiModelConfigItem {
             id: "credential-b:claude-test".to_string(),
             name: "claude-test".to_string(),
+            backend: AiBackendKind::Genai,
             provider_kind: Some(AiProviderKind::Anthropic),
             credential_id: Some("credential-b".to_string()),
             enabled: true,

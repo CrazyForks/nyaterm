@@ -7,8 +7,8 @@ use crate::error::{AppError, AppResult};
 use crate::storage::{self, SettingsDocKey};
 
 use super::types::{
-    AiAuditLog, AiChatRequest, AiMessage, AiMessageRole, AiSession, AiSessionScope,
-    AiSessionScopeType, AppendAiAuditRequest, now_rfc3339, uuid,
+    AiAuditLog, AiChatRequest, AiMessage, AiMessageRole, AiSession, AiSessionBackendMetadata,
+    AiSessionScope, AiSessionScopeType, AppendAiAuditRequest, now_rfc3339, uuid,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -137,6 +137,7 @@ pub(super) fn save_user_message(
                 },
                 created_at: now.clone(),
                 updated_at: now.clone(),
+                backend_metadata: None,
             });
         }
         history.messages.push(AiMessage {
@@ -199,6 +200,36 @@ pub(super) fn append_message(app: &AppHandle, message: AiMessage) -> AppResult<(
         }
         history.messages.push(message);
         trim_history(history);
+        Ok(())
+    })
+}
+
+pub(super) fn get_session_backend_metadata(
+    app: &AppHandle,
+    session_id: &str,
+) -> AppResult<Option<AiSessionBackendMetadata>> {
+    Ok(load_history(app)?
+        .sessions
+        .into_iter()
+        .find(|session| session.id == session_id)
+        .and_then(|session| session.backend_metadata))
+}
+
+pub(super) fn set_session_backend_metadata(
+    app: &AppHandle,
+    session_id: &str,
+    metadata: AiSessionBackendMetadata,
+) -> AppResult<()> {
+    let _ = app;
+    let session_id = session_id.to_string();
+    storage::update_settings_doc::<AiHistoryFile, _, _>(SettingsDocKey::AiHistory, |history| {
+        if let Some(session) = history
+            .sessions
+            .iter_mut()
+            .find(|item| item.id == session_id)
+        {
+            session.backend_metadata = Some(metadata);
+        }
         Ok(())
     })
 }
@@ -327,6 +358,7 @@ mod tests {
                 title: session_id.clone(),
                 created_at: updated_at.clone(),
                 updated_at,
+                backend_metadata: None,
             });
             for message_idx in 0..10 {
                 history.messages.push(AiMessage {

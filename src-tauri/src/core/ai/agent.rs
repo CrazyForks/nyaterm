@@ -1138,6 +1138,193 @@ fn append_agent_command_audit(
     );
 }
 
+pub(super) async fn run_external_agent_command_step(
+    app: &AppHandle,
+    session_manager: Arc<SessionManager>,
+    approval_manager: Arc<AgentApprovalManager>,
+    stream_id: &str,
+    session_id: &str,
+    request: &AiChatRequest,
+    settings: &AiSettings,
+    step_index: u16,
+    command: String,
+    reason: Option<String>,
+    target_terminal_session_id: Option<String>,
+) -> AppResult<CommandObservation> {
+    let parsed = AgentLlmResponse {
+        thought: reason
+            .clone()
+            .unwrap_or_else(|| "Codex requested terminal command execution".to_string()),
+        action: "execute_command".to_string(),
+        command: Some(command.clone()),
+        target_terminal_session_id,
+        risk_level: None,
+        risk_reason: reason,
+        answer: None,
+    };
+    let assessment = assess_agent_command_risk(&parsed, &command);
+    let command_target =
+        resolve_agent_command_target(request, parsed.target_terminal_session_id.as_deref())?;
+    let (decision, approval_reason) = decide_agent_command_execution(settings, &assessment);
+
+    if decision == ApprovalDecision::NeedsApproval {
+        let approval_step = AgentStepPayload {
+            stream_id: stream_id.to_string(),
+            session_id: Some(session_id.to_string()),
+            step_index,
+            thought: parsed.thought.clone(),
+            action: build_execute_action(
+                &command,
+                Some(command_target.clone()),
+                &assessment,
+                approval_reason.clone(),
+            ),
+            observation: None,
+            status: AgentStepStatus::NeedsApproval,
+            error: None,
+        };
+        emit_agent_step(app, stream_id, approval_step);
+
+        let approval_key = format!("{stream_id}-{step_index}");
+        let approved = approval_manager
+            .register(approval_key)
+            .await
+            .await
+            .unwrap_or(false);
+
+        if !approved {
+            let step = AgentStepPayload {
+                stream_id: stream_id.to_string(),
+                session_id: Some(session_id.to_string()),
+                step_index,
+                thought: parsed.thought,
+                action: build_execute_action(
+                    &command,
+                    Some(command_target.clone()),
+                    &assessment,
+                    approval_reason,
+                ),
+                observation: None,
+                status: AgentStepStatus::Rejected,
+                error: None,
+            };
+            emit_agent_step(app, stream_id, step);
+            append_agent_command_audit(
+                app,
+                request,
+                "ai.agent_reject_execute",
+                &command,
+                assessment.effective_risk,
+                false,
+                true,
+            );
+            return Err(AppError::Cancelled(build_agent_rejected_message(
+                &command,
+                &request.options.language,
+            )));
+        }
+    }
+
+    emit_agent_step(
+        app,
+        stream_id,
+        AgentStepPayload {
+            stream_id: stream_id.to_string(),
+            session_id: Some(session_id.to_string()),
+            step_index,
+            thought: parsed.thought.clone(),
+            action: build_execute_action(&command, Some(command_target.clone()), &assessment, None),
+            observation: None,
+            status: AgentStepStatus::Running,
+            error: None,
+        },
+    );
+
+    let step_timeout = settings
+        .agent_step_timeout_ms
+        .unwrap_or(DEFAULT_AGENT_STEP_TIMEOUT_MS);
+    let result = if settings.agent_background_execution_enabled {
+        execute_command_in_background(
+            &session_manager,
+            &command_target.terminal_session_id,
+            &command,
+            step_timeout,
+        )
+        .await
+    } else {
+        execute_command_on_session(
+            app,
+            session_manager,
+            &command_target.terminal_session_id,
+            &command,
+            &request.options.language,
+            step_timeout,
+            step_index,
+            settings.terminal_output_lines,
+        )
+        .await
+    };
+
+    match result {
+        Ok(observation) => {
+            emit_agent_step(
+                app,
+                stream_id,
+                AgentStepPayload {
+                    stream_id: stream_id.to_string(),
+                    session_id: Some(session_id.to_string()),
+                    step_index,
+                    thought: parsed.thought,
+                    action: build_execute_action(&command, Some(command_target), &assessment, None),
+                    observation: Some(observation.clone()),
+                    status: AgentStepStatus::Completed,
+                    error: None,
+                },
+            );
+            append_agent_command_audit(
+                app,
+                request,
+                if decision == ApprovalDecision::Auto {
+                    "ai.agent_auto_execute"
+                } else {
+                    "ai.agent_authorized_execute"
+                },
+                &command,
+                assessment.effective_risk,
+                true,
+                false,
+            );
+            Ok(observation)
+        }
+        Err(error) => {
+            emit_agent_step(
+                app,
+                stream_id,
+                AgentStepPayload {
+                    stream_id: stream_id.to_string(),
+                    session_id: Some(session_id.to_string()),
+                    step_index,
+                    thought: parsed.thought,
+                    action: build_execute_action(&command, Some(command_target), &assessment, None),
+                    observation: None,
+                    status: AgentStepStatus::Failed,
+                    error: Some(error.to_string()),
+                },
+            );
+            append_agent_command_audit(
+                app,
+                request,
+                "ai.agent_execute_failed",
+                &command,
+                assessment.effective_risk,
+                false,
+                true,
+            );
+            Err(error)
+        }
+    }
+}
+
 async fn run_agent_tool_step(
     app: &AppHandle,
     stream_id: &str,

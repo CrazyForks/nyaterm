@@ -1,4 +1,4 @@
-use crate::config::{AiMode, AiModelSource, AiProviderKind, RiskLevel};
+use crate::config::{AiBackendKind, AiMode, AiModelSource, AiProviderKind, RiskLevel};
 use serde::de::Deserializer;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -305,6 +305,17 @@ pub struct AiSession {
     pub title: String,
     pub created_at: String,
     pub updated_at: String,
+    #[serde(default)]
+    pub backend_metadata: Option<AiSessionBackendMetadata>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AiSessionBackendMetadata {
+    #[serde(default)]
+    pub backend: AiBackendKind,
+    #[serde(default)]
+    pub external_thread_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -376,6 +387,8 @@ pub struct AppendAiAuditRequest {
 pub struct AiModelDiscovery {
     pub id: String,
     pub name: String,
+    #[serde(default)]
+    pub backend: AiBackendKind,
     #[serde(default)]
     pub provider_kind: Option<AiProviderKind>,
     #[serde(default)]
