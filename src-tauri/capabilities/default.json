@@ -58,6 +58,7 @@
     "quick-command",
     "quick-command-*",
     "auto-upload-*",
-    "file-editor-*"
+    "file-editor-*",
+    "file-preview-*"
   ]
 }
