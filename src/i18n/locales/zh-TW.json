@@ -2250,16 +2250,27 @@
     "unsplit": "合併所有窗格"
   },
   "temporarySsh": {
+    "baudRatePlaceholder": "波特率，例如 115200",
     "connect": "連線",
-    "description": "貼上或輸入 SSH 目標，將直接開啟一個不儲存的 SSH 工作階段。",
-    "empty": "請輸入 SSH 目標。",
+    "description": "選擇協定並直接開啟一個不儲存的臨時工作階段。",
+    "empty": "請輸入連線目標。",
     "inlinePassword": "不支援在輸入中攜帶密碼。需要登入資訊時 NyaTerm 會再詢問。",
-    "invalidInput": "請輸入有效的 SSH 命令、URL 或主機。",
+    "invalidBaudRate": "請輸入有效的波特率。",
+    "invalidInput": "請輸入有效的命令、URL 或主機。",
     "invalidPort": "埠必須在 1 到 65535 之間。",
+    "loadingSerialPorts": "正在載入序列埠裝置...",
     "missingHost": "請輸入要連線的主機。",
+    "noSerialPortsFound": "找不到序列埠裝置",
     "placeholder": "ssh -p 2222 root@192.168.142.100",
+    "protocolSerial": "Serial",
+    "protocolSsh": "SSH",
+    "protocolTelnet": "Telnet",
+    "serialPortPlaceholder": "選擇序列埠裝置",
+    "serialPortRequired": "請選擇序列埠裝置。",
+    "serialPortsLoadFailed": "載入序列埠裝置失敗：{{error}}",
+    "telnetPlaceholder": "telnet 192.168.1.10 2323",
     "title": "臨時連結",
-    "unsupportedOption": "臨時連結暫時只支援 SSH 直連。"
+    "unsupportedOption": "該 SSH 輸入使用了臨時連結暫不支援的選項。"
   },
   "terminal": {
     "actionLinkAltClickHint": "Alt+單擊：更多動作",

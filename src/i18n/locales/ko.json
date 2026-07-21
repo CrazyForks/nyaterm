@@ -2237,16 +2237,27 @@
     "unsplit": "모든 창 병합"
   },
   "temporarySsh": {
+    "baudRatePlaceholder": "보드레이트, 예: 115200",
     "connect": "연결",
-    "description": "SSH 대상을 붙여넣거나 입력하세요. 저장하지 않고 바로 SSH 세션을 엽니다.",
-    "empty": "SSH 대상을 입력하세요.",
+    "description": "프로토콜을 선택하고 저장하지 않는 임시 세션을 바로 엽니다.",
+    "empty": "연결 대상을 입력하세요.",
     "inlinePassword": "인라인 비밀번호는 지원되지 않습니다. 필요할 때 NyaTerm이 자격 증명을 물어봅니다.",
-    "invalidInput": "올바른 SSH 명령, URL, 또는 호스트를 입력하세요.",
+    "invalidBaudRate": "올바른 보드레이트를 입력하세요.",
+    "invalidInput": "올바른 명령, URL, 또는 호스트를 입력하세요.",
     "invalidPort": "포트는 1에서 65535 사이여야 합니다.",
+    "loadingSerialPorts": "시리얼 포트를 불러오는 중...",
     "missingHost": "연결할 호스트를 입력하세요.",
+    "noSerialPortsFound": "시리얼 포트를 찾을 수 없습니다",
     "placeholder": "ssh -p 2222 root@192.168.142.100",
+    "protocolSerial": "Serial",
+    "protocolSsh": "SSH",
+    "protocolTelnet": "Telnet",
+    "serialPortPlaceholder": "시리얼 포트 선택",
+    "serialPortRequired": "시리얼 포트를 선택하세요.",
+    "serialPortsLoadFailed": "시리얼 포트를 불러오지 못했습니다: {{error}}",
+    "telnetPlaceholder": "telnet 192.168.1.10 2323",
     "title": "임시 링크",
-    "unsupportedOption": "임시 링크는 직접 SSH 연결만 지원합니다."
+    "unsupportedOption": "이 SSH 입력에는 임시 링크에서 지원하지 않는 옵션이 있습니다."
   },
   "terminal": {
     "actionLinkAltClickHint": "Alt+클릭: 더 많은 작업",

@@ -2255,16 +2255,27 @@
     "unsplit": "Merge All Panes"
   },
   "temporarySsh": {
+    "baudRatePlaceholder": "Baud rate, e.g. 115200",
     "connect": "Connect",
-    "description": "Paste or type an SSH target. This opens a direct SSH session without saving it.",
-    "empty": "Enter an SSH target.",
+    "description": "Choose a protocol and open a temporary session without saving it.",
+    "empty": "Enter a target.",
     "inlinePassword": "Inline passwords are not supported. NyaTerm will ask for credentials when needed.",
-    "invalidInput": "Enter a valid SSH command, URL, or host.",
+    "invalidBaudRate": "Enter a valid baud rate.",
+    "invalidInput": "Enter a valid command, URL, or host.",
     "invalidPort": "Port must be between 1 and 65535.",
+    "loadingSerialPorts": "Loading serial ports...",
     "missingHost": "Enter a host to connect to.",
+    "noSerialPortsFound": "No serial ports found",
     "placeholder": "ssh -p 2222 root@192.168.142.100",
+    "protocolSerial": "Serial",
+    "protocolSsh": "SSH",
+    "protocolTelnet": "Telnet",
+    "serialPortPlaceholder": "Select serial port",
+    "serialPortRequired": "Select a serial port.",
+    "serialPortsLoadFailed": "Failed to load serial ports: {{error}}",
+    "telnetPlaceholder": "telnet 192.168.1.10 2323",
     "title": "Temporary Link",
-    "unsupportedOption": "Temporary links only support direct SSH connections."
+    "unsupportedOption": "This SSH input uses options that temporary links do not support."
   },
   "terminal": {
     "actionLinkAltClickHint": "Alt+Click: more actions",
