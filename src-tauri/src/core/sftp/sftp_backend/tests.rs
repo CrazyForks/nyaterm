@@ -310,6 +310,40 @@ fn recursive_remove_accepts_normal_remote_targets() {
 }
 
 #[test]
+fn raw_path_match_allows_fast_remove_without_raw_path() {
+    let path_ref = RemotePathRef::new("/tmp/nyaterm", None).unwrap();
+
+    assert!(raw_path_matches_display_path(&path_ref));
+}
+
+#[test]
+fn raw_path_match_allows_fast_remove_when_bytes_match_display_path() {
+    let token = raw_path_token(b"/tmp/nyaterm");
+    let path_ref = RemotePathRef::new("/tmp/nyaterm", Some(&token)).unwrap();
+
+    assert!(raw_path_matches_display_path(&path_ref));
+}
+
+#[test]
+fn raw_path_match_rejects_fast_remove_when_bytes_do_not_match_display_path() {
+    let token = raw_path_token(b"/tmp/raw-name");
+    let path_ref = RemotePathRef::new("/tmp/display-name", Some(&token)).unwrap();
+
+    assert!(!raw_path_matches_display_path(&path_ref));
+}
+
+#[test]
+fn raw_path_match_does_not_override_unsafe_recursive_remove_targets() {
+    for target in ["/", "..", "/tmp/../x"] {
+        let token = raw_path_token(target.as_bytes());
+        let path_ref = RemotePathRef::new(target, Some(&token)).unwrap();
+
+        assert!(raw_path_matches_display_path(&path_ref));
+        assert!(!is_safe_recursive_remove_target(path_ref.display_path()));
+    }
+}
+
+#[test]
 fn raw_child_path_is_joined_from_parent_bytes() {
     let parent = b"/remote/\x80parent".to_vec();
     let child = b"\x81child".to_vec();

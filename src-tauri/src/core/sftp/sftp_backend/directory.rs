@@ -176,16 +176,28 @@ impl SftpBackend {
     pub(super) async fn remove_dir_fast_ref(&self, path: &RemotePathRef) -> AppResult<()> {
         let is_utf8_sftp_encoding =
             Encoding::for_label(self.encoding.trim().as_bytes()).unwrap_or(UTF_8) == UTF_8;
-        if is_utf8_sftp_encoding
-            && path.raw_path().is_none()
-            && is_safe_recursive_remove_target(path.display_path())
-        {
+        let has_raw_path = path.raw_path().is_some();
+        let raw_path_matches_display_path = raw_path_matches_display_path(path);
+        let is_safe_target = is_safe_recursive_remove_target(path.display_path());
+        if is_utf8_sftp_encoding && raw_path_matches_display_path && is_safe_target {
             let command = format!(
                 "rm -rf -- {}",
                 sh_quote(normalize_remote_dir_path(path.display_path()))
             );
+            tracing::info!(
+                remote_path = path.display_path(),
+                command = %command,
+                "Trying remote rm -rf fast path for directory delete"
+            );
             match self.exec_ok(&command).await {
-                Ok(_) => return Ok(()),
+                Ok(_) => {
+                    tracing::info!(
+                        remote_path = path.display_path(),
+                        command = %command,
+                        "Remote rm -rf fast path succeeded"
+                    );
+                    return Ok(());
+                }
                 Err(error) => {
                     tracing::warn!(
                         remote_path = path.display_path(),
@@ -194,6 +206,15 @@ impl SftpBackend {
                     );
                 }
             }
+        } else {
+            tracing::info!(
+                remote_path = path.display_path(),
+                is_utf8_sftp_encoding,
+                has_raw_path,
+                raw_path_matches_display_path,
+                is_safe_target,
+                "Remote rm -rf fast path not used; falling back to SFTP recursive delete"
+            );
         }
 
         let raw_path = self.remote_path_bytes(path);
@@ -515,6 +536,13 @@ impl SftpBackend {
         pool.close_all().await;
         result
     }
+}
+
+pub(super) fn raw_path_matches_display_path(path: &RemotePathRef) -> bool {
+    path.raw_path().map_or(true, |raw_path| {
+        normalize_remote_dir_path_bytes(raw_path)
+            == normalize_remote_dir_path(path.display_path()).as_bytes()
+    })
 }
 
 pub(super) fn sftp_directory_file_concurrency(
